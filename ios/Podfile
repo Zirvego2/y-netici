@@ -37,22 +37,27 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+    
     target.build_configurations.each do |config|
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
-      # Fix for unsupported option '-G' error
-      # Disable debug symbols generation that uses -G
+      # 1. Hedef sürümü 15.0 yapmanı öneririm (Firebase uyumluluğu için daha sağlamdır)
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+      
+      # 2. Hatalı -G seçeneği için Debug sembollerini kontrol altına al
       config.build_settings['GCC_GENERATE_DEBUGGING_SYMBOLS'] = 'NO'
       config.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf'
-      # Remove -G flag from compiler flags if present
-      ['OTHER_CFLAGS', 'OTHER_CPLUSPLUSFLAGS', 'OTHER_SWIFT_FLAGS'].each do |flag_key|
+      
+      # 3. Tüm olası flag alanlarından -G'yi temizle (LDFLAGS dahil)
+      ['OTHER_CFLAGS', 'OTHER_CPLUSPLUSFLAGS', 'OTHER_SWIFT_FLAGS', 'OTHER_LDFLAGS'].each do |flag_key|
         flags = config.build_settings[flag_key]
         if flags.is_a?(Array)
-          config.build_settings[flag_key] = flags.reject { |flag| flag.to_s.include?('-G') }
+          config.build_settings[flag_key] = flags.reject { |flag| flag.to_s.strip == '-G' }
         elsif flags.is_a?(String)
-          config.build_settings[flag_key] = flags.gsub(/-G\S*\s*/, '').strip
+          # Sadece -G'yi siler, başka parametreleri bozmaz
+          config.build_settings[flag_key] = flags.gsub(/\s-G(\s|$)/, ' ').strip
         end
       end
-      # Disable bitcode
+      
+      # 4. Bitcode artık modern iOS projelerinde istenmiyor
       config.build_settings['ENABLE_BITCODE'] = 'NO'
     end
   end
