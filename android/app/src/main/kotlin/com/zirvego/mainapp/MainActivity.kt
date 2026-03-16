@@ -1,4 +1,4 @@
-package com.zirvego.mainapp
+package com.zirvego.yonetici
 
 import io.flutter.embedding.android.FlutterActivity
 
