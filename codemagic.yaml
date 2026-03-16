@@ -1,0 +1,71 @@
+workflows:
+  ios-workflow:
+    name: iOS Workflow
+    max_build_duration: 120
+    instance_type: mac_mini_m1
+    environment:
+      flutter: "3.16.0"  # -G hatasını önlemek için güncel Flutter sürümü
+      xcode: latest
+      cocoapods: default
+      groups:
+        - app_store_credentials
+      vars:
+        APP_ID: com.zirvego.yonetici
+        BUNDLE_ID: com.zirvego.yonetici
+        XCODE_WORKSPACE: "ios/Runner.xcworkspace"
+        XCODE_SCHEME: "Runner"
+    scripts:
+      - name: Flutter version
+        script: |
+          flutter --version
+          flutter doctor -v
+      - name: Get Flutter dependencies
+        script: |
+          flutter pub get
+      - name: Clean build
+        script: |
+          flutter clean
+          cd ios
+          rm -rf Pods Podfile.lock .symlinks
+          pod cache clean --all || true
+          # -G hatasını önlemek için build cache'i temizle
+          rm -rf ~/Library/Developer/Xcode/DerivedData/*
+          cd ..
+      - name: Install CocoaPods dependencies
+        script: |
+          cd ios
+          # -G hatasını önlemek için pod install öncesi temizlik
+          pod deintegrate || true
+          pod install --repo-update
+          cd ..
+      - name: Set up code signing settings on Xcode project
+        script: |
+          xcode-project use-profiles
+      - name: Build ipa for distribution
+        script: |
+          # -G hatasını önlemek için environment variable'ları ayarla
+          export FLUTTER_BUILD_MODE=release
+          export ENABLE_BITCODE=NO
+          export GCC_GENERATE_DEBUGGING_SYMBOLS=NO
+          export DEBUG_INFORMATION_FORMAT=dwarf
+          flutter build ipa --release \
+            --build-name=$(CM_BUILD_NUMBER) \
+            --build-number=$(CM_BUILD_NUMBER) \
+            --no-codesign
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcode-build-log.txt
+      - flutter_drive.log
+    publishing:
+      email:
+        recipients:
+          - oksuzali60@gmail.com
+        notify:
+          success: true
+          failure: false
+      # Slack yapılandırması (isteğe bağlı - kullanmıyorsanız bu bölümü silebilirsiniz)
+      # slack:
+      #   channel: '#builds'
+      #   notify:
+      #     success: true
+      #     failure: true
