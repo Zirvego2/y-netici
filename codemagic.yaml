@@ -4,7 +4,7 @@ workflows:
     max_build_duration: 120
     instance_type: mac_mini_m1
     environment:
-      flutter: "3.16.0"  # -G hatasını önlemek için güncel Flutter sürümü
+      flutter: "3.22.0"  # -G hatasını önlemek için en güncel Flutter sürümü
       xcode: latest
       cocoapods: default
       groups:
@@ -41,6 +41,21 @@ workflows:
       - name: Set up code signing settings on Xcode project
         script: |
           xcode-project use-profiles
+      - name: Patch Flutter build script to remove -G flag
+        script: |
+          # Flutter'ın build script'lerinde -G flag'ini kaldır
+          FLUTTER_ROOT=$(flutter --version | head -1 | awk '{print $NF}' | tr -d '•' || echo "$FLUTTER_ROOT")
+          if [ -z "$FLUTTER_ROOT" ]; then
+            FLUTTER_ROOT=$(which flutter | sed 's|/bin/flutter||')
+          fi
+          SCRIPT_PATH="$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh"
+          if [ -f "$SCRIPT_PATH" ]; then
+            # -G flag'ini script'ten kaldır (macOS sed syntax)
+            sed -i.bak 's/-G[[:space:]]*//g' "$SCRIPT_PATH" || true
+            echo "Flutter build script patched: $SCRIPT_PATH"
+          else
+            echo "Flutter build script not found at: $SCRIPT_PATH"
+          fi
       - name: Build ipa for distribution
         script: |
           # -G hatasını önlemek için environment variable'ları ayarla
@@ -48,6 +63,10 @@ workflows:
           export ENABLE_BITCODE=NO
           export GCC_GENERATE_DEBUGGING_SYMBOLS=NO
           export DEBUG_INFORMATION_FORMAT=dwarf
+          export CLANG_DEBUG_INFORMATION_LEVEL=line-tables-only
+          # Xcode build settings'i override et
+          export OTHER_CFLAGS="-Wno-error"
+          export OTHER_CPLUSPLUSFLAGS="-Wno-error"
           flutter build ipa --release \
             --build-name=$(CM_BUILD_NUMBER) \
             --build-number=$(CM_BUILD_NUMBER) \
