@@ -31,9 +31,14 @@ workflows:
       - name: Get Flutter packages
         script: |
           flutter pub get
+      - name: Sync iOS project files with current Flutter SDK
+        script: |
+          # Prevent "Upgrading Podfile" surprises by syncing templates to the Flutter SDK used on CI.
+          flutter create --platforms=ios .
       - name: Install pods
         script: |
           cd ios
+          ruby patch_podfile_rg_fix.rb
           pod repo update
           pod install --repo-update
           cd ..
