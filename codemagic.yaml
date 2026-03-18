@@ -92,7 +92,8 @@ workflows:
       - name: Install pods
         script: |
           cd ios
-          ruby patch_podfile_rg_fix.rb
+          # NOTE: patch_podfile_rg_fix.rb kaldırıldı - Podfile'da zaten post_install var ve -G flag stripping yapıyor
+          # Bu script duplicate post_install ekliyordu.
           pod repo update
           pod install --repo-update
           cd ..
@@ -133,7 +134,37 @@ workflows:
           fi
       - name: Set up code signing (Codemagic profiles)
         script: |
+          # xcode-project use-profiles profiles'ları Xcode projesine uygular ve export_options.plist oluşturur
           xcode-project use-profiles
+          
+          # Code signing environment variable'larını kontrol et
+          echo "Code signing diagnostics:"
+          echo "PROVISIONING_PROFILE_SPECIFIER: ${PROVISIONING_PROFILE_SPECIFIER:-NOT SET}"
+          echo "DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM:-NOT SET}"
+          
+          # export_options.plist dosyasının varlığını kontrol et
+          if [ -f "/Users/builder/export_options.plist" ]; then
+            echo "OK: export_options.plist found at /Users/builder/export_options.plist"
+          else
+            echo "WARNING: export_options.plist not found at /Users/builder/export_options.plist"
+            echo "Creating basic export_options.plist..."
+            cat > /Users/builder/export_options.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>method</key>
+  <string>app-store</string>
+  <key>uploadBitcode</key>
+  <false/>
+  <key>uploadSymbols</key>
+  <true/>
+  <key>compileBitcode</key>
+  <false/>
+</dict>
+</plist>
+EOF
+          fi
       - name: Build signed IPA (App Store / Ad Hoc)
         script: |
           set -o pipefail
@@ -171,7 +202,17 @@ workflows:
             cd ..
           fi
           
-          # 5. Xcode archive (pod install tamamlandı, Podfile korunuyor)
+          # 5. Code signing bilgilerini Xcode projesinden al
+          # xcode-project use-profiles zaten çalıştırıldı, proje ayarları güncellenmiş olmalı
+          # Xcode projesinden signing bilgilerini oku
+          PROFILE_SPECIFIER=$(grep -A 1 'PROVISIONING_PROFILE_SPECIFIER' ios/Runner.xcodeproj/project.pbxproj | grep -o '"[^"]*"' | head -1 | tr -d '"' || echo "")
+          TEAM_ID=$(grep -A 1 'DEVELOPMENT_TEAM' ios/Runner.xcodeproj/project.pbxproj | grep -o '[A-Z0-9]\{10\}' | head -1 || echo "")
+          
+          echo "Code signing info from Xcode project:"
+          echo "PROVISIONING_PROFILE_SPECIFIER: ${PROFILE_SPECIFIER:-NOT FOUND}"
+          echo "DEVELOPMENT_TEAM: ${TEAM_ID:-NOT FOUND}"
+          
+          # 6. Xcode archive (pod install tamamlandı, Podfile korunuyor)
           cd ios
           xcodebuild archive \
             -workspace Runner.xcworkspace \
@@ -180,19 +221,36 @@ workflows:
             -archivePath "$(pwd)/../build/ios/Runner.xcarchive" \
             -destination generic/platform=iOS \
             CODE_SIGN_STYLE=Manual \
-            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_SPECIFIER" \
-            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            2>&1 | tee ../xcode_archive.log
+            ${PROFILE_SPECIFIER:+PROVISIONING_PROFILE_SPECIFIER="$PROFILE_SPECIFIER"} \
+            ${TEAM_ID:+DEVELOPMENT_TEAM="$TEAM_ID"} \
+            2>&1 | tee ../xcode_archive.log || ARCHIVE_EXIT_CODE=$?
           cd ..
           
-          # 6. Export IPA
+          if [ -n "${ARCHIVE_EXIT_CODE:-}" ]; then
+            echo "ERROR: Xcode archive failed with exit code $ARCHIVE_EXIT_CODE"
+            cat xcode_archive.log
+            exit $ARCHIVE_EXIT_CODE
+          fi
+          
+          # 7. Export IPA
+          if [ ! -f "/Users/builder/export_options.plist" ]; then
+            echo "ERROR: export_options.plist not found!"
+            exit 1
+          fi
+          
           xcodebuild -exportArchive \
             -archivePath build/ios/Runner.xcarchive \
             -exportPath build/ios/ipa \
             -exportOptionsPlist /Users/builder/export_options.plist \
-            2>&1 | tee xcode_export.log
+            2>&1 | tee xcode_export.log || EXPORT_EXIT_CODE=$?
           
-          # 7. Final Podfile integrity kontrolü
+          if [ -n "${EXPORT_EXIT_CODE:-}" ]; then
+            echo "ERROR: IPA export failed with exit code $EXPORT_EXIT_CODE"
+            cat xcode_export.log
+            exit $EXPORT_EXIT_CODE
+          fi
+          
+          # 8. Final Podfile integrity kontrolü
           post_install_count=$(grep -c '^post_install do' ios/Podfile || echo '0')
           if [ "$post_install_count" != "1" ]; then
             echo "WARNING: Podfile has $post_install_count post_install blocks after export (expected 1)"
@@ -206,7 +264,9 @@ workflows:
           fi
     artifacts:
       - build/ios/ipa/*.ipa
-      - flutter_build_ipa.log
+      - flutter_build_ios.log
+      - xcode_archive.log
+      - xcode_export.log
     publishing:
       email:
         recipients:
