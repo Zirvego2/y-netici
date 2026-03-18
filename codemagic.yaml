@@ -33,7 +33,8 @@ workflows:
       - name: Install pods
         script: |
           cd ios
-          pod install
+          pod repo update
+          pod install --repo-update
           cd ..
 
       - name: Set up code signing
