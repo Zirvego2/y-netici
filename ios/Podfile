@@ -77,6 +77,8 @@ post_install do |installer|
     "Pods/Target Support Files/gRPC-Core/**/*.xcconfig",
     "Pods/Target Support Files/GoogleDataTransport/**/*.xcconfig",
     "Pods/Target Support Files/FirebaseMessaging/**/*.xcconfig",
+    "Pods/Target Support Files/**/*.xcconfig",
+    "Flutter/*.xcconfig"
   ]
 
   xcconfig_globs.each do |glob|
