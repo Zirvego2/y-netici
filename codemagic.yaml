@@ -62,16 +62,29 @@ workflows:
           else
             echo "Target Support Files not found"
           fi
+          echo ""
+          echo "3) Full Pods directory scan for compiler -G token (xcconfig/args/scripts):"
+          if [ -d "ios/Pods" ]; then
+            grep -RInE '(^|[[:space:]])-G([0-9A-Za-z._-]+)?($|[[:space:]])' ios/Pods \
+              --exclude-dir="Headers" \
+              --exclude="project.pbxproj" \
+              || echo "OK: No compiler -G token found anywhere under ios/Pods"
+          else
+            echo "ios/Pods not found"
+          fi
       - name: Set up code signing (Codemagic profiles)
         script: |
           xcode-project use-profiles
       - name: Build signed IPA (App Store / Ad Hoc)
         script: |
-          flutter build ipa --release \
+          set -o pipefail
+          flutter build ipa --release -v \
             --build-number=$CM_BUILD_NUMBER \
-            --export-options-plist /Users/builder/export_options.plist
+            --export-options-plist /Users/builder/export_options.plist \
+            2>&1 | tee flutter_build_ipa.log
     artifacts:
       - build/ios/ipa/*.ipa
+      - flutter_build_ipa.log
     publishing:
       email:
         recipients:
