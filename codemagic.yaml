@@ -81,15 +81,14 @@ workflows:
       - name: Sync iOS project files with current Flutter SDK
         script: |
           # Prevent "Upgrading Podfile" surprises by syncing templates to the Flutter SDK used on CI.
-          # Backup our custom Podfile first
+          # Backup our custom Podfile first (it has post_install hooks and -G flag fixes)
           cp ios/Podfile ios/Podfile.backup || true
           flutter create --platforms=ios .
-          # Restore our custom Podfile if flutter create duplicated it
-          if grep -c "^platform :ios" ios/Podfile | grep -q "^2$"; then
-            echo "Podfile was duplicated by flutter create, restoring from backup..."
+          # Always restore our custom Podfile: flutter create regenerates it with template,
+          # which would overwrite our post_install hooks and cause "multiple post_install hooks" error.
+          if [ -f ios/Podfile.backup ]; then
+            echo "Restoring custom Podfile (with post_install hooks) after flutter create..."
             mv ios/Podfile.backup ios/Podfile
-          else
-            rm -f ios/Podfile.backup
           fi
       - name: Install pods
         script: |
