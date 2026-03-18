@@ -11,6 +11,9 @@ workflows:
       # Şimdilik en yaygın desteklenen sürümlerden birine pinliyoruz:
       xcode: "16.2"
       cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.zirvego.yonetici
       groups:
         - app_store_credentials
     scripts:
