@@ -33,10 +33,29 @@ workflows:
       - name: Set up keychain + fetch signing files (Codemagic)
         script: |
           # Makes sure certificates/profiles from Codemagic "Code signing identities" are available in the build keychain.
+          set -e
           keychain initialize
-          # If App Store Connect integration is configured in Codemagic, this fetches provisioning profiles/certs.
-          app-store-connect fetch-signing-files || true
+
+          # Fetch App Store provisioning profile for this bundle id via App Store Connect API key (provided by Codemagic).
+          CERT_DIR="$HOME/Library/MobileDevice/Certificates"
+          PROF_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$CERT_DIR" "$PROF_DIR"
+
+          # NOTE: This command requires the bundle id identifier as the last argument.
+          # We use --create so Codemagic can create a fresh profile if needed.
+          app-store-connect fetch-signing-files \
+            --platform IOS \
+            --type IOS_APP_STORE \
+            --create \
+            --certificates-dir "$CERT_DIR" \
+            --profiles-dir "$PROF_DIR" \
+            com.zirvego.yonetici
+
+          # Import any downloaded / pre-provisioned .p12 into the build keychain.
           keychain add-certificates
+
+          # Diagnostic: must show at least one valid identity for signing.
+          security find-identity -p codesigning -v || true
       - name: Get Flutter packages
         script: |
           flutter pub get
