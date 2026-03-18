@@ -4,88 +4,57 @@ workflows:
     max_build_duration: 120
     instance_type: mac_mini_m1
     environment:
-      flutter: "3.22.0"  # -G hatasını önlemek için en güncel Flutter sürümü
-      # "latest" yerine sabitleyin. Codemagic UI'da mevcut bir sürümü seçin (ör: 15.4).
-      xcode: "15.4"
+      flutter: "3.22.0"
+      # IMPORTANT: "latest" kullanmayın. Codemagic hesabınızda mevcut olan bir Xcode sürümüne pinleyin.
+      # Örn: "16.4" / "16.2" / "15.4" (hangisi Codemagic UI'da görünüyorsa onu yazın)
+      xcode: "16.4"
       cocoapods: default
-      groups:
-        - app_store_credentials
-      vars:
-        APP_ID: com.zirvego.yonetici
-        BUNDLE_ID: com.zirvego.yonetici
-        XCODE_WORKSPACE: "ios/Runner.xcworkspace"
-        XCODE_SCHEME: "Runner"
     scripts:
-      - name: Toolchain versions
+      - name: Tool versions
         script: |
           flutter --version
           flutter doctor -v
           xcodebuild -version
           pod --version
-      - name: Get Flutter dependencies
-        script: |
-          flutter pub get
-      - name: Clean build
+      - name: Clean project
         script: |
           flutter clean
-          # -G hatasını önlemek için build cache'i temizle
+          rm -rf build
           rm -rf ~/Library/Developer/Xcode/DerivedData/*
           cd ios
           rm -rf Pods Podfile.lock .symlinks
+          pod deintegrate || true
           pod cache clean --all || true
           cd ..
-      - name: Install CocoaPods dependencies
+      - name: Get Flutter packages
+        script: |
+          flutter pub get
+      - name: Install pods
         script: |
           cd ios
-          # -G hatasını önlemek için pod install öncesi temizlik
-          pod deintegrate || true
           pod repo update
-          pod install
+          pod install --repo-update
           cd ..
-      - name: Identify which Pod/target adds -G (diagnostic)
+      - name: Diagnose -G flag
         script: |
-          set -e
-          echo "Searching for '-G' inside CocoaPods project..."
-          PODS_PBXPROJ="ios/Pods/Pods.xcodeproj/project.pbxproj"
-          if [ -f "$PODS_PBXPROJ" ]; then
-            if grep -n "[-]G" "$PODS_PBXPROJ"; then
-              echo ""
-              echo "Found '-G' in Pods project above. This usually points to a specific pod target (often gRPC-Core / BoringSSL-GRPC)."
-            else
-              echo "No '-G' found in Pods.xcodeproj/project.pbxproj"
-            fi
+          echo "Searching for -G in Pods project..."
+          if [ -f "ios/Pods/Pods.xcodeproj/project.pbxproj" ]; then
+            grep -n "\\-G" ios/Pods/Pods.xcodeproj/project.pbxproj || echo "No -G flag found in Pods project"
           else
-            echo "Pods project not found at $PODS_PBXPROJ"
+            echo "Pods project not found"
           fi
-      - name: Set up code signing settings on Xcode project
+      - name: Build unsigned IPA
         script: |
-          xcode-project use-profiles
-      - name: Build ipa for distribution
-        script: |
-          # -G hatasını önlemek için environment variable'ları ayarla
-          export FLUTTER_BUILD_MODE=release
           export ENABLE_BITCODE=NO
           export GCC_GENERATE_DEBUGGING_SYMBOLS=NO
           export DEBUG_INFORMATION_FORMAT=dwarf
-          export CLANG_DEBUG_INFORMATION_LEVEL=line-tables-only
-          flutter build ipa --release \
-            --build-name=$(CM_BUILD_NUMBER) \
-            --build-number=$(CM_BUILD_NUMBER) \
-            --no-codesign
+          flutter build ipa --release --no-codesign --build-number=$CM_BUILD_NUMBER
     artifacts:
       - build/ios/ipa/*.ipa
-      - /tmp/xcode-build-log.txt
-      - flutter_drive.log
     publishing:
       email:
         recipients:
           - oksuzali60@gmail.com
         notify:
           success: true
-          failure: false
-      # Slack yapılandırması (isteğe bağlı - kullanmıyorsanız bu bölümü silebilirsiniz)
-      # slack:
-      #   channel: '#builds'
-      #   notify:
-      #     success: true
-      #     failure: true
+          failure: true
