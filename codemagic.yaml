@@ -12,14 +12,10 @@ workflows:
       xcode: "16.2"
       cocoapods: default
       ios_signing:
-        # Reference names from Codemagic > Settings > Code signing identities
-        # iOS provisioning profiles: `ios_app_store_yonetici`
-        provisioning_profiles:
-          - ios_app_store_yonetici
-        # iOS certificates: use the certificate reference name you generated
-        # (you set it as "Zirvego-Yönetici" in the UI)
-        certificates:
-          - Zirvego-Yönetici
+        # Let Codemagic pick the matching provisioning profile + certificate automatically
+        # for this bundle id and distribution type.
+        distribution_type: app_store
+        bundle_identifier: com.zirvego.yonetici
       groups:
         - app_store_credentials
     scripts:
@@ -137,56 +133,14 @@ workflows:
           # xcode-project use-profiles profiles'ları Xcode projesine uygular ve export_options.plist oluşturur
           xcode-project use-profiles
           
-          # Code signing environment variable'larını kontrol et
-          echo "Code signing diagnostics:"
-          echo "PROVISIONING_PROFILE_SPECIFIER: ${PROVISIONING_PROFILE_SPECIFIER:-NOT SET}"
-          echo "DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM:-NOT SET}"
-          
-          # Keychain'deki mevcut certificate'leri listele
-          echo ""
-          echo "Available code signing certificates in keychain:"
-          security find-identity -p codesigning -v | grep "Apple Distribution" || echo "No Apple Distribution certificates found"
-          
-          # Provisioning profile'dan certificate bilgisini al
-          # Provisioning profile'ı bul ve içindeki certificate bilgisini oku
-          PROFILE_PATH=""
-          if [ -n "${PROVISIONING_PROFILE_SPECIFIER:-}" ]; then
-            # Provisioning profile'ı bul
-            PROFILE_PATH=$(find "$HOME/Library/MobileDevice/Provisioning Profiles" -name "*.mobileprovision" -exec grep -l "$PROVISIONING_PROFILE_SPECIFIER" {} \; 2>/dev/null | head -1)
-            if [ -n "$PROFILE_PATH" ]; then
-              echo "Found provisioning profile at: $PROFILE_PATH"
-              # Provisioning profile'dan certificate bilgisini çıkar
-              CERT_NAME=$(security cms -D -i "$PROFILE_PATH" 2>/dev/null | grep -A 1 "DeveloperCertificates" | grep -o "CN=[^,]*" | head -1 | sed 's/CN=//' || echo "")
-              if [ -n "$CERT_NAME" ]; then
-                echo "Certificate name from profile: $CERT_NAME"
-              fi
-            fi
-          fi
-          
-          # Keychain'deki Apple Distribution certificate'ini bul
-          SIGNING_CERT=$(security find-identity -p codesigning -v | grep "Apple Distribution" | head -1 | sed 's/.*"\(.*\)".*/\1/' || echo "")
-          
-          # export_options.plist dosyasının varlığını kontrol et ve güncelle
+          # IMPORTANT: Do NOT inject/override signingCertificate manually here.
+          # Xcode export validates that the provisioning profile includes the signing certificate.
+          # If we force a certificate here, it can easily mismatch the fetched profile.
           if [ -f "/Users/builder/export_options.plist" ]; then
             echo "OK: export_options.plist found at /Users/builder/export_options.plist"
-            # Eğer signingCertificate yoksa ekle
-            if ! grep -q "signingCertificate" /Users/builder/export_options.plist && [ -n "$SIGNING_CERT" ]; then
-              echo "Adding signingCertificate to export_options.plist..."
-              # plutil kullanarak signingCertificate ekle (macOS'ta mevcut)
-              plutil -insert signingCertificate -string "$SIGNING_CERT" /Users/builder/export_options.plist 2>/dev/null || {
-                echo "plutil not available, using sed to add signingCertificate..."
-                # plutil yoksa sed ile ekle (daha güvenli yöntem)
-                # Önce mevcut dosyayı yedekle
-                cp /Users/builder/export_options.plist /Users/builder/export_options.plist.backup
-                # </dict> satırından önce signingCertificate ekle
-                sed -i '' "s|</dict>|  <key>signingCertificate</key>\\n  <string>$SIGNING_CERT</string>\\n</dict>|" /Users/builder/export_options.plist 2>/dev/null || \
-                sed -i "s|</dict>|  <key>signingCertificate</key>\\n  <string>$SIGNING_CERT</string>\\n</dict>|" /Users/builder/export_options.plist
-              }
-            fi
           else
             echo "WARNING: export_options.plist not found at /Users/builder/export_options.plist"
-            echo "Creating basic export_options.plist..."
-            # Heredoc yerine echo kullanarak XML oluştur (YAML parser hatası önlemek için)
+            echo "Creating basic export_options.plist (without signingCertificate)..."
             {
               echo '<?xml version="1.0" encoding="UTF-8"?>'
               echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
@@ -194,10 +148,6 @@ workflows:
               echo '<dict>'
               echo '  <key>method</key>'
               echo '  <string>app-store</string>'
-              if [ -n "$SIGNING_CERT" ]; then
-                echo '  <key>signingCertificate</key>'
-                echo "  <string>$SIGNING_CERT</string>"
-              fi
               echo '  <key>uploadBitcode</key>'
               echo '  <false/>'
               echo '  <key>uploadSymbols</key>'
@@ -209,8 +159,6 @@ workflows:
             } > /Users/builder/export_options.plist
           fi
           
-          # Final export_options.plist içeriğini göster
-          echo ""
           echo "Final export_options.plist content:"
           cat /Users/builder/export_options.plist
       - name: Build signed IPA (App Store / Ad Hoc)
@@ -277,6 +225,14 @@ workflows:
           
           # 6. Xcode archive (pod install tamamlandı, Podfile korunuyor)
           cd ios
+          
+          # Codemagic job env'den gelen PROVISIONING_PROFILE_SPECIFIER/DEVELOPMENT_TEAM
+          # gibi değişkenler Xcode'a override olarak geçebiliyor; bu da Pods target'larına
+          # provisioning profile basıp ARCHIVE'i kırıyor. Archive öncesi bu değişkenleri
+          # unset ederek sadece `xcode-project use-profiles` ile gelen doğru signing'ın
+          # kullanılmasını istiyoruz.
+          unset PROVISIONING_PROFILE_SPECIFIER DEVELOPMENT_TEAM CODE_SIGN_IDENTITY || true
+          
           xcodebuild archive \
             -workspace Runner.xcworkspace \
             -scheme Runner \
