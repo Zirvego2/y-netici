@@ -25,7 +25,9 @@ dependencies:
   google_fonts: ^6.1.0
   flutter_svg: ^2.0.9
   shared_preferences: ^2.2.2
-  intl: ^0.20.2
+  # NOTE: Flutter SDK (flutter_localizations) pins intl to 0.19.x on CI.
+  # Keep this compatible so `flutter pub get` succeeds on Codemagic.
+  intl: ^0.19.0
   
   # Form Validation
   email_validator: ^2.1.17
