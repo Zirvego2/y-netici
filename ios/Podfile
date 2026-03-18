@@ -46,14 +46,20 @@ post_install do |installer|
       config.build_settings['GCC_GENERATE_DEBUGGING_SYMBOLS'] = 'NO'
       config.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf'
       
-      # 3. Tüm olası flag alanlarından -G'yi temizle (LDFLAGS dahil)
+      # 3. Tüm olası flag alanlarından -G / -G* (örn: -G, -G0, -Gline-tables-only) temizle
+      # Not: Bazı pod'lar flags alanlarını Array, bazıları String tutar.
       ['OTHER_CFLAGS', 'OTHER_CPLUSPLUSFLAGS', 'OTHER_SWIFT_FLAGS', 'OTHER_LDFLAGS'].each do |flag_key|
         flags = config.build_settings[flag_key]
         if flags.is_a?(Array)
-          config.build_settings[flag_key] = flags.reject { |flag| flag.to_s.strip == '-G' }
+          config.build_settings[flag_key] = flags.reject do |flag|
+            f = flag.to_s.strip
+            f == '-G' || f.start_with?('-G')
+          end
         elsif flags.is_a?(String)
-          # Sadece -G'yi siler, başka parametreleri bozmaz
-          config.build_settings[flag_key] = flags.gsub(/\s-G(\s|$)/, ' ').strip
+          # -G ve -G* tokenlarını siler, diğer parametreleri bozmaz
+          # (token bazlı temizleme: boşlukla ayrılmış parametrelerde güvenli)
+          cleaned = flags.split(/\s+/).reject { |t| t == '-G' || t.start_with?('-G') }.join(' ')
+          config.build_settings[flag_key] = cleaned.strip
         end
       end
       

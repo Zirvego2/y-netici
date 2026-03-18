@@ -5,7 +5,8 @@ workflows:
     instance_type: mac_mini_m1
     environment:
       flutter: "3.22.0"  # -G hatasını önlemek için en güncel Flutter sürümü
-      xcode: latest
+      # "latest" yerine sabitleyin. Codemagic UI'da mevcut bir sürümü seçin (ör: 15.4).
+      xcode: "15.4"
       cocoapods: default
       groups:
         - app_store_credentials
@@ -15,47 +16,50 @@ workflows:
         XCODE_WORKSPACE: "ios/Runner.xcworkspace"
         XCODE_SCHEME: "Runner"
     scripts:
-      - name: Flutter version
+      - name: Toolchain versions
         script: |
           flutter --version
           flutter doctor -v
+          xcodebuild -version
+          pod --version
       - name: Get Flutter dependencies
         script: |
           flutter pub get
       - name: Clean build
         script: |
           flutter clean
+          # -G hatasını önlemek için build cache'i temizle
+          rm -rf ~/Library/Developer/Xcode/DerivedData/*
           cd ios
           rm -rf Pods Podfile.lock .symlinks
           pod cache clean --all || true
-          # -G hatasını önlemek için build cache'i temizle
-          rm -rf ~/Library/Developer/Xcode/DerivedData/*
           cd ..
       - name: Install CocoaPods dependencies
         script: |
           cd ios
           # -G hatasını önlemek için pod install öncesi temizlik
           pod deintegrate || true
-          pod install --repo-update
+          pod repo update
+          pod install
           cd ..
+      - name: Identify which Pod/target adds -G (diagnostic)
+        script: |
+          set -e
+          echo "Searching for '-G' inside CocoaPods project..."
+          PODS_PBXPROJ="ios/Pods/Pods.xcodeproj/project.pbxproj"
+          if [ -f "$PODS_PBXPROJ" ]; then
+            if grep -n "[-]G" "$PODS_PBXPROJ"; then
+              echo ""
+              echo "Found '-G' in Pods project above. This usually points to a specific pod target (often gRPC-Core / BoringSSL-GRPC)."
+            else
+              echo "No '-G' found in Pods.xcodeproj/project.pbxproj"
+            fi
+          else
+            echo "Pods project not found at $PODS_PBXPROJ"
+          fi
       - name: Set up code signing settings on Xcode project
         script: |
           xcode-project use-profiles
-      - name: Patch Flutter build script to remove -G flag
-        script: |
-          # Flutter'ın build script'lerinde -G flag'ini kaldır
-          FLUTTER_ROOT=$(flutter --version | head -1 | awk '{print $NF}' | tr -d '•' || echo "$FLUTTER_ROOT")
-          if [ -z "$FLUTTER_ROOT" ]; then
-            FLUTTER_ROOT=$(which flutter | sed 's|/bin/flutter||')
-          fi
-          SCRIPT_PATH="$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh"
-          if [ -f "$SCRIPT_PATH" ]; then
-            # -G flag'ini script'ten kaldır (macOS sed syntax)
-            sed -i.bak 's/-G[[:space:]]*//g' "$SCRIPT_PATH" || true
-            echo "Flutter build script patched: $SCRIPT_PATH"
-          else
-            echo "Flutter build script not found at: $SCRIPT_PATH"
-          fi
       - name: Build ipa for distribution
         script: |
           # -G hatasını önlemek için environment variable'ları ayarla
@@ -64,9 +68,6 @@ workflows:
           export GCC_GENERATE_DEBUGGING_SYMBOLS=NO
           export DEBUG_INFORMATION_FORMAT=dwarf
           export CLANG_DEBUG_INFORMATION_LEVEL=line-tables-only
-          # Xcode build settings'i override et
-          export OTHER_CFLAGS="-Wno-error"
-          export OTHER_CPLUSPLUSFLAGS="-Wno-error"
           flutter build ipa --release \
             --build-name=$(CM_BUILD_NUMBER) \
             --build-number=$(CM_BUILD_NUMBER) \
