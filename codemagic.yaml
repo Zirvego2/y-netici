@@ -133,11 +133,28 @@ workflows:
           # xcode-project use-profiles profiles'ları Xcode projesine uygular ve export_options.plist oluşturur
           xcode-project use-profiles
           
-          # IMPORTANT: Do NOT inject/override signingCertificate manually here.
-          # Xcode export validates that the provisioning profile includes the signing certificate.
-          # If we force a certificate here, it can easily mismatch the fetched profile.
+          # Keychain'deki certificate'leri kontrol et
+          echo "Available certificates in keychain:"
+          security find-identity -p codesigning -v | grep "Apple Distribution" || echo "No Apple Distribution certificates found"
+          
+          # Provisioning profile'ları kontrol et ve certificate ile eşleştir
+          echo ""
+          echo "Checking provisioning profiles..."
+          if [ -d "$HOME/Library/MobileDevice/Provisioning Profiles" ]; then
+            for profile in "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision; do
+              if [ -f "$profile" ]; then
+                echo "Profile: $(basename "$profile")"
+                # Profile içindeki certificate'leri kontrol et
+                security cms -D -i "$profile" 2>/dev/null | grep -A 10 "DeveloperCertificates" | head -5 || true
+              fi
+            done
+          fi
+          
+          # export_options.plist'i kontrol et veya oluştur
           if [ -f "/Users/builder/export_options.plist" ]; then
             echo "OK: export_options.plist found at /Users/builder/export_options.plist"
+            echo "Current export_options.plist content:"
+            cat /Users/builder/export_options.plist
           else
             echo "WARNING: export_options.plist not found at /Users/builder/export_options.plist"
             echo "Creating basic export_options.plist (without signingCertificate)..."
@@ -159,6 +176,7 @@ workflows:
             } > /Users/builder/export_options.plist
           fi
           
+          echo ""
           echo "Final export_options.plist content:"
           cat /Users/builder/export_options.plist
       - name: Build signed IPA (App Store / Ad Hoc)
@@ -226,13 +244,26 @@ workflows:
           # 6. Xcode archive (pod install tamamlandı, Podfile korunuyor)
           cd ios
           
-          # Codemagic job env'den gelen PROVISIONING_PROFILE_SPECIFIER/DEVELOPMENT_TEAM
-          # gibi değişkenler Xcode'a override olarak geçebiliyor; bu da Pods target'larına
-          # provisioning profile basıp ARCHIVE'i kırıyor. Archive öncesi bu değişkenleri
-          # unset ederek sadece `xcode-project use-profiles` ile gelen doğru signing'ın
-          # kullanılmasını istiyoruz.
-          unset PROVISIONING_PROFILE_SPECIFIER DEVELOPMENT_TEAM CODE_SIGN_IDENTITY || true
+          # Archive öncesi doğru certificate ve profile'ı bul
+          echo "Finding available certificates and profiles..."
+          AVAILABLE_CERTS=$(security find-identity -p codesigning -v | grep "Apple Distribution" | head -1)
+          echo "Available certificates:"
+          security find-identity -p codesigning -v | grep "Apple Distribution" || echo "No Apple Distribution certificates found"
           
+          # Provisioning profile'ları kontrol et
+          echo ""
+          echo "Available provisioning profiles:"
+          if [ -d "$HOME/Library/MobileDevice/Provisioning Profiles" ]; then
+            ls -la "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision 2>/dev/null | head -5 || echo "No provisioning profiles found"
+          fi
+          
+          # xcode-project use-profiles tarafından set edilen değişkenleri kullan
+          # Ancak eğer profile ile certificate uyumsuzsa, doğru certificate'i bul
+          if [ -n "${PROVISIONING_PROFILE_SPECIFIER:-}" ]; then
+            echo "Using provisioning profile: $PROVISIONING_PROFILE_SPECIFIER"
+          fi
+          
+          # Archive işlemi - CODE_SIGN_STYLE=Manual kullan ama certificate/profile'ı otomatik seç
           xcodebuild archive \
             -workspace Runner.xcworkspace \
             -scheme Runner \
