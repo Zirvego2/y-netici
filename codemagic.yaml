@@ -59,9 +59,12 @@ workflows:
           fi
 
           # Import any downloaded / pre-provisioned .p12 into the build keychain.
-          keychain add-certificates
+          # NOTE: When using Codemagic "Code signing identities" + `xcode-project use-profiles`,
+          # certificates may be injected later by Codemagic tools. So don't fail the build here
+          # if no .p12 files are present in the default search locations yet.
+          keychain add-certificates || echo "No local .p12 found yet; continuing (xcode-project use-profiles will handle signing)."
 
-          # Diagnostic: must show at least one valid identity for signing.
+          # Diagnostic (non-fatal)
           security find-identity -p codesigning -v || true
       - name: Get Flutter packages
         script: |
