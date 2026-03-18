@@ -36,6 +36,41 @@ workflows:
       - name: Get Flutter packages
         script: |
           flutter pub get
+          
+          # Flutter xcconfig dosyalarının oluşturulduğundan emin ol
+          echo "Verifying Flutter xcconfig files..."
+          if [ ! -f "ios/Flutter/Generated.xcconfig" ]; then
+            echo "ERROR: ios/Flutter/Generated.xcconfig not found after flutter pub get"
+            echo "Creating Flutter directory structure..."
+            mkdir -p ios/Flutter
+            # Flutter'ı zorla xcconfig oluşturmaya zorla
+            flutter precache --ios || true
+            flutter pub get
+          fi
+          
+          # xcconfig dosyalarını kontrol et
+          if [ -f "ios/Flutter/Generated.xcconfig" ]; then
+            echo "✅ Generated.xcconfig found"
+            echo "First 10 lines:"
+            head -10 ios/Flutter/Generated.xcconfig
+          else
+            echo "ERROR: Generated.xcconfig still not found"
+            exit 1
+          fi
+          
+          if [ -f "ios/Flutter/Debug.xcconfig" ]; then
+            echo "✅ Debug.xcconfig found"
+          else
+            echo "ERROR: Debug.xcconfig not found"
+            exit 1
+          fi
+          
+          if [ -f "ios/Flutter/Release.xcconfig" ]; then
+            echo "✅ Release.xcconfig found"
+          else
+            echo "ERROR: Release.xcconfig not found"
+            exit 1
+          fi
 
       - name: Verify Podfile integrity
         script: |
@@ -53,10 +88,22 @@ workflows:
 
       - name: Install pods
         script: |
+          # Flutter xcconfig dosyalarının varlığını tekrar kontrol et
+          if [ ! -f "ios/Flutter/Generated.xcconfig" ]; then
+            echo "ERROR: Generated.xcconfig not found before pod install"
+            exit 1
+          fi
+          
           cd ios
           pod repo update
           pod install --repo-update
           cd ..
+          
+          # Pod install sonrası xcconfig dosyalarının hala var olduğunu kontrol et
+          if [ ! -f "ios/Flutter/Generated.xcconfig" ]; then
+            echo "ERROR: Generated.xcconfig disappeared after pod install"
+            exit 1
+          fi
 
       - name: Verify -G flag in Pods project
         script: |
@@ -115,6 +162,13 @@ workflows:
         script: |
           set -o pipefail
 
+          # Flutter xcconfig dosyalarının varlığını son kez kontrol et
+          echo "Final check: Flutter xcconfig files..."
+          ls -la ios/Flutter/*.xcconfig || {
+            echo "ERROR: Flutter xcconfig files missing before build"
+            exit 1
+          }
+
           # Environment'tan sızabilecek signing override'ları temizle
           unset PROVISIONING_PROFILE_SPECIFIER || true
           unset DEVELOPMENT_TEAM || true
@@ -125,30 +179,65 @@ workflows:
           cp ios/Podfile ios/Podfile.backup
           echo "Podfile backed up. Original post_install count: $(grep -c '^post_install do' ios/Podfile || echo '0')"
 
-          flutter build ipa \
+          # Önce flutter build ios ile xcconfig dosyalarını oluştur ve doğrula
+          echo "Building iOS app (no codesign) to ensure xcconfig files are ready..."
+          flutter build ios \
             --release \
             --build-number=$CM_BUILD_NUMBER \
-            --export-options-plist=/Users/builder/export_options.plist \
-            2>&1 | tee flutter_build_ipa.log || BUILD_EXIT_CODE=$?
+            --no-codesign \
+            2>&1 | tee flutter_build_ios.log || BUILD_IOS_EXIT_CODE=$?
 
-          # Podfile restore
+          # xcconfig dosyalarının hala var olduğunu kontrol et
+          if [ ! -f "ios/Flutter/Generated.xcconfig" ]; then
+            echo "ERROR: Generated.xcconfig missing after flutter build ios"
+            exit 1
+          fi
+
+          # Podfile restore (flutter build ios Podfile'ı değiştirmiş olabilir)
           if [ -f ios/Podfile.backup ]; then
             echo "Restoring Podfile from backup..."
             mv ios/Podfile.backup ios/Podfile
-
-            post_install_count=$(grep -c '^post_install do' ios/Podfile || echo '0')
-            echo "Podfile restored. post_install count: $post_install_count"
-
-            if [ "$post_install_count" != "1" ]; then
-              echo "ERROR: Podfile restore failed! Still has $post_install_count post_install blocks"
-              cat ios/Podfile
-              exit 1
-            fi
-
-            echo "Running pod install with restored Podfile..."
             cd ios
             pod install
             cd ..
+          fi
+
+          # Archive ve export için xcodebuild kullan
+          echo "Creating archive..."
+          cd ios
+          xcodebuild archive \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -archivePath "$(pwd)/../build/ios/Runner.xcarchive" \
+            -destination generic/platform=iOS \
+            CODE_SIGN_STYLE=Manual \
+            2>&1 | tee ../xcode_archive.log || ARCHIVE_EXIT_CODE=$?
+          cd ..
+
+          if [ -n "${ARCHIVE_EXIT_CODE:-}" ]; then
+            echo "ERROR: Xcode archive failed with exit code $ARCHIVE_EXIT_CODE"
+            cat xcode_archive.log
+            exit $ARCHIVE_EXIT_CODE
+          fi
+
+          # Export IPA
+          echo "Exporting IPA..."
+          xcodebuild -exportArchive \
+            -archivePath build/ios/Runner.xcarchive \
+            -exportPath build/ios/ipa \
+            -exportOptionsPlist /Users/builder/export_options.plist \
+            2>&1 | tee xcode_export.log || EXPORT_EXIT_CODE=$?
+
+          if [ -n "${EXPORT_EXIT_CODE:-}" ]; then
+            echo "ERROR: IPA export failed with exit code $EXPORT_EXIT_CODE"
+            cat xcode_export.log
+            exit $EXPORT_EXIT_CODE
+          fi
+
+          # Build başarısız olduysa exit code'u koru
+          if [ -n "${BUILD_IOS_EXIT_CODE:-}" ]; then
+            exit $BUILD_IOS_EXIT_CODE
           fi
 
           # Final Podfile integrity kontrolü
@@ -159,14 +248,11 @@ workflows:
             echo "SUCCESS: Podfile integrity maintained (1 post_install block)"
           fi
 
-          # Build başarısız olduysa exit code'u koru
-          if [ -n "${BUILD_EXIT_CODE:-}" ]; then
-            exit $BUILD_EXIT_CODE
-          fi
-
     artifacts:
       - build/ios/ipa/*.ipa
-      - flutter_build_ipa.log
+      - flutter_build_ios.log
+      - xcode_archive.log
+      - xcode_export.log
 
     publishing:
       app_store_connect:
