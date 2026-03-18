@@ -137,10 +137,30 @@ workflows:
       - name: Build signed IPA (App Store / Ad Hoc)
         script: |
           set -o pipefail
+          # CRITICAL: flutter build ipa Podfile'ı güncelliyor ve duplicate post_install oluşturuyor.
+          # Podfile'ı korumak için backup al, build yap, sonra restore et.
+          cp ios/Podfile ios/Podfile.backup
+          
+          # flutter build ipa çalıştır (içinde pod install var, Podfile'ı güncelleyebilir)
           flutter build ipa --release -v \
             --build-number=$CM_BUILD_NUMBER \
             --export-options-plist /Users/builder/export_options.plist \
-            2>&1 | tee flutter_build_ipa.log
+            2>&1 | tee flutter_build_ipa.log || BUILD_EXIT_CODE=$?
+          
+          # Podfile restore et (flutter build ipa duplicate post_install eklemiş olabilir)
+          if [ -f ios/Podfile.backup ]; then
+            echo "Restoring Podfile from backup (flutter build ipa may have modified it)..."
+            mv ios/Podfile.backup ios/Podfile
+            # Podfile restore edildi, pod install tekrar çalıştır
+            cd ios
+            pod install
+            cd ..
+          fi
+          
+          # Build başarısız olduysa exit code'u koru
+          if [ -n "${BUILD_EXIT_CODE:-}" ]; then
+            exit $BUILD_EXIT_CODE
+          fi
     artifacts:
       - build/ios/ipa/*.ipa
       - flutter_build_ipa.log
