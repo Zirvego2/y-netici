@@ -1,7 +1,5 @@
-# Uncomment this line to define a global platform for your project
 platform :ios, '15.0'
 
-# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
 
 project 'Runner', {
@@ -17,9 +15,10 @@ def flutter_root
   end
 
   File.foreach(generated_xcode_build_settings_path) do |line|
-    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    matches = line.match(/FLUTTER_ROOT=(.*)/)
     return matches[1].strip if matches
   end
+
   raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
 end
 
@@ -43,6 +42,14 @@ post_install do |installer|
       config.build_settings['ENABLE_BITCODE'] = 'NO'
       config.build_settings['GCC_GENERATE_DEBUGGING_SYMBOLS'] = 'NO'
       config.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf'
+
+      # Pods target'larına manuel signing/profile basılmasını engelle
+      config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
+      config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
+      config.build_settings['EXPANDED_CODE_SIGN_IDENTITY'] = ''
+      config.build_settings['CODE_SIGN_IDENTITY'] = ''
+      config.build_settings['PROVISIONING_PROFILE_SPECIFIER'] = ''
+      config.build_settings['DEVELOPMENT_TEAM'] = ''
 
       %w[
         OTHER_CFLAGS
@@ -69,21 +76,17 @@ post_install do |installer|
     end
   end
 
-  # Some pods (notably BoringSSL-GRPC / gRPC-Core) can inject compiler flags via *.xcconfig files.
-  # Pod build_settings changes above won't remove tokens defined in those xcconfig files.
-  # This makes the build deterministic in CI by stripping any `-G` / `-G*` tokens from xcconfig files.
+  # Bazı pod'lar xcconfig üzerinden -G benzeri flag enjekte edebiliyor.
+  # Bu yüzden ilgili xcconfig dosyalarını da ayrıca temizliyoruz.
   xcconfig_globs = [
-    "Pods/Target Support Files/BoringSSL-GRPC/**/*.xcconfig",
-    "Pods/Target Support Files/gRPC-Core/**/*.xcconfig",
-    "Pods/Target Support Files/GoogleDataTransport/**/*.xcconfig",
-    "Pods/Target Support Files/FirebaseMessaging/**/*.xcconfig",
+    "Pods/Target Support Files/**/*.xcconfig"
   ]
 
   xcconfig_globs.each do |glob|
     Dir.glob(glob).each do |path|
       begin
         contents = File.read(path)
-        # Token-based removal: remove -G and -G* occurrences in flag lines without breaking other flags.
+
         updated = contents.lines.map do |line|
           if line =~ /OTHER_(CFLAGS|CPLUSPLUSFLAGS|LDFLAGS|SWIFT_FLAGS)\s*=/
             tokens = line.split(/\s+/)
@@ -93,6 +96,7 @@ post_install do |installer|
             line
           end
         end.join
+
         if updated != contents
           File.write(path, updated)
         end
