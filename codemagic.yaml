@@ -12,8 +12,6 @@ workflows:
       xcode: "16.2"
       cocoapods: default
       ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.zirvego.yonetici
         # Reference names from Codemagic > Settings > Code signing identities
         # iOS provisioning profiles: `ios_app_store_yonetici`
         provisioning_profiles:
