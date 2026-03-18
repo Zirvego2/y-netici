@@ -14,6 +14,14 @@ workflows:
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.zirvego.yonetici
+        # Reference names from Codemagic > Settings > Code signing identities
+        # iOS provisioning profiles: `ios_app_store_yonetici`
+        provisioning_profiles:
+          - ios_app_store_yonetici
+        # iOS certificates: use the certificate reference name you generated
+        # (you set it as "Zirvego-Yönetici" in the UI)
+        certificates:
+          - Zirvego-Yönetici
       groups:
         - app_store_credentials
     scripts:
