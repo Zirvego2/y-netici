@@ -9,6 +9,8 @@ workflows:
       # Örn: "16.4" / "16.2" / "15.4" (hangisi Codemagic UI'da görünüyorsa onu yazın)
       xcode: "16.4"
       cocoapods: default
+      groups:
+        - app_store_credentials
     scripts:
       - name: Tool versions
         script: |
@@ -60,12 +62,14 @@ workflows:
           else
             echo "Target Support Files not found"
           fi
-      - name: Build unsigned IPA
+      - name: Set up code signing (Codemagic profiles)
         script: |
-          export ENABLE_BITCODE=NO
-          export GCC_GENERATE_DEBUGGING_SYMBOLS=NO
-          export DEBUG_INFORMATION_FORMAT=dwarf
-          flutter build ipa --release --no-codesign --build-number=$CM_BUILD_NUMBER
+          xcode-project use-profiles
+      - name: Build signed IPA (App Store / Ad Hoc)
+        script: |
+          flutter build ipa --release \
+            --build-number=$CM_BUILD_NUMBER \
+            --export-options-plist /Users/builder/export_options.plist
     artifacts:
       - build/ios/ipa/*.ipa
     publishing:
