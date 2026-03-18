@@ -3,12 +3,9 @@ workflows:
     name: iOS Workflow
     max_build_duration: 120
     instance_type: mac_mini_m1
+
     environment:
       flutter: "3.22.0"
-      # IMPORTANT: "latest" kullanmayın. Codemagic hesabınızda mevcut olan bir Xcode sürümüne pinleyin.
-      # NOT: "15.4" sizin Codemagic imajınızda yoksa "Unsupported Xcode version" hatası alırsınız.
-      # Codemagic UI'da hangi Xcode sürümleri listeleniyorsa onlardan birini yazın.
-      # Şimdilik en yaygın desteklenen sürümlerden birine pinliyoruz:
       xcode: "16.2"
       cocoapods: default
       ios_signing:
@@ -16,6 +13,7 @@ workflows:
         bundle_identifier: com.zirvego.yonetici
       groups:
         - app_store_credentials
+
     scripts:
       - name: Tool versions
         script: |
@@ -23,6 +21,7 @@ workflows:
           flutter doctor -v
           xcodebuild -version
           pod --version
+
       - name: Clean project
         script: |
           flutter clean
@@ -33,12 +32,13 @@ workflows:
           pod deintegrate || true
           pod cache clean --all || true
           cd ..
+
       - name: Get Flutter packages
         script: |
           flutter pub get
+
       - name: Verify Podfile integrity
         script: |
-          # Ensure Podfile has only one post_install block (flutter create was breaking it)
           if [ -f ios/Podfile ]; then
             post_install_count=$(grep -c "^post_install do" ios/Podfile || echo "0")
             if [ "$post_install_count" != "1" ]; then
@@ -46,64 +46,54 @@ workflows:
               exit 1
             fi
             echo "OK: Podfile has exactly 1 post_install block"
+          else
+            echo "ERROR: ios/Podfile not found"
+            exit 1
           fi
+
       - name: Install pods
         script: |
           cd ios
-          # NOTE: patch_podfile_rg_fix.rb kaldırıldı - Podfile'da zaten post_install var ve -G flag stripping yapıyor
-          # Bu script duplicate post_install ekliyordu.
           pod repo update
           pod install --repo-update
           cd ..
-      - name: Verify Podfile + detect -G in Pods project (must be empty)
+
+      - name: Verify -G flag in Pods project
         script: |
           echo "===== ios/Podfile (first 120 lines) ====="
           sed -n '1,120p' ios/Podfile
+
+          echo ""
           echo "===== Searching for -G in Pods.xcodeproj ====="
           if [ -f "ios/Pods/Pods.xcodeproj/project.pbxproj" ]; then
-            # If this prints lines, it shows EXACTLY which pod/target injected -G.
             grep -n "\\-G" ios/Pods/Pods.xcodeproj/project.pbxproj || echo "OK: No -G found in Pods project"
           else
-            echo "Pods project not found (pod install may have failed?)"
+            echo "ERROR: Pods project not found"
+            exit 1
           fi
-      - name: Diagnose -G flag
-        script: |
-          echo "Searching for *compiler flag* -G (not pod names) ..."
-          echo "1) Pods project (may include pod names, not always flags):"
-          if [ -f "ios/Pods/Pods.xcodeproj/project.pbxproj" ]; then
-            grep -nE '(^|[[:space:]])-G([0-9A-Za-z._-]+)?($|[[:space:]])' ios/Pods/Pods.xcodeproj/project.pbxproj || true
-          fi
+
           echo ""
-          echo "2) Target Support Files xcconfigs (MOST LIKELY source):"
+          echo "===== Searching Target Support Files for compiler -G token ====="
           if [ -d "ios/Pods/Target Support Files" ]; then
             grep -RInE '(^|[[:space:]])-G([0-9A-Za-z._-]+)?($|[[:space:]])' "ios/Pods/Target Support Files" || echo "OK: No compiler -G token found in Target Support Files"
           else
-            echo "Target Support Files not found"
+            echo "WARNING: Target Support Files not found"
           fi
-          echo ""
-          echo "3) Full Pods directory scan for compiler -G token (xcconfig/args/scripts):"
-          if [ -d "ios/Pods" ]; then
-            grep -RInE '(^|[[:space:]])-G([0-9A-Za-z._-]+)?($|[[:space:]])' ios/Pods \
-              --exclude-dir="Headers" \
-              --exclude="project.pbxproj" \
-              || echo "OK: No compiler -G token found anywhere under ios/Pods"
-          else
-            echo "ios/Pods not found"
-          fi
-      - name: Set up code signing (Codemagic profiles)
+
+      - name: Set up code signing
         script: |
           # xcode-project use-profiles profiles'ları Xcode projesine uygular ve export_options.plist oluşturur
           xcode-project use-profiles --project ios/Runner.xcodeproj
-          
+
           if [ ! -f "/Users/builder/export_options.plist" ]; then
             echo "ERROR: /Users/builder/export_options.plist not found after xcode-project use-profiles"
             exit 1
           fi
-          
+
           # Keychain'deki certificate'leri kontrol et
           echo "Available certificates in keychain:"
           security find-identity -p codesigning -v | grep "Apple Distribution" || echo "No Apple Distribution certificates found"
-          
+
           # Provisioning profile'ları kontrol et ve certificate ile eşleştir
           echo ""
           echo "Checking provisioning profiles..."
@@ -116,41 +106,51 @@ workflows:
               fi
             done
           fi
-          
+
           echo ""
           echo "Generated export_options.plist:"
           cat /Users/builder/export_options.plist
-      - name: Build signed IPA (App Store / Ad Hoc)
+
+      - name: Build signed IPA
         script: |
           set -o pipefail
-          
-          # Podfile backup/restore: flutter build ipa sırasında post_install tekrar eklenebiliyor.
+
+          # Environment'tan sızabilecek signing override'ları temizle
+          unset PROVISIONING_PROFILE_SPECIFIER || true
+          unset DEVELOPMENT_TEAM || true
+          unset CODE_SIGN_IDENTITY || true
+          unset CODE_SIGN_STYLE || true
+
+          # Podfile backup
           cp ios/Podfile ios/Podfile.backup
           echo "Podfile backed up. Original post_install count: $(grep -c '^post_install do' ios/Podfile || echo '0')"
-          
-          flutter build ipa --release \
+
+          flutter build ipa \
+            --release \
             --build-number=$CM_BUILD_NUMBER \
             --export-options-plist=/Users/builder/export_options.plist \
             2>&1 | tee flutter_build_ipa.log || BUILD_EXIT_CODE=$?
-          
+
+          # Podfile restore
           if [ -f ios/Podfile.backup ]; then
             echo "Restoring Podfile from backup..."
             mv ios/Podfile.backup ios/Podfile
+
             post_install_count=$(grep -c '^post_install do' ios/Podfile || echo '0')
             echo "Podfile restored. post_install count: $post_install_count"
-            
+
             if [ "$post_install_count" != "1" ]; then
               echo "ERROR: Podfile restore failed! Still has $post_install_count post_install blocks"
               cat ios/Podfile
               exit 1
             fi
-            
+
             echo "Running pod install with restored Podfile..."
             cd ios
             pod install
             cd ..
           fi
-          
+
           # Final Podfile integrity kontrolü
           post_install_count=$(grep -c '^post_install do' ios/Podfile || echo '0')
           if [ "$post_install_count" != "1" ]; then
@@ -158,15 +158,16 @@ workflows:
           else
             echo "SUCCESS: Podfile integrity maintained (1 post_install block)"
           fi
-          
+
           # Build başarısız olduysa exit code'u koru
           if [ -n "${BUILD_EXIT_CODE:-}" ]; then
             exit $BUILD_EXIT_CODE
           fi
+
     artifacts:
       - build/ios/ipa/*.ipa
-      - flutter_build_ios.log
       - flutter_build_ipa.log
+
     publishing:
       app_store_connect:
         auth: integration
