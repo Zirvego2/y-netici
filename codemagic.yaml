@@ -148,22 +148,23 @@ workflows:
           else
             echo "WARNING: export_options.plist not found at /Users/builder/export_options.plist"
             echo "Creating basic export_options.plist..."
-            cat > /Users/builder/export_options.plist <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>method</key>
-  <string>app-store</string>
-  <key>uploadBitcode</key>
-  <false/>
-  <key>uploadSymbols</key>
-  <true/>
-  <key>compileBitcode</key>
-  <false/>
-</dict>
-</plist>
-EOF
+            # Heredoc yerine echo kullanarak XML oluştur (YAML parser hatası önlemek için)
+            {
+              echo '<?xml version="1.0" encoding="UTF-8"?>'
+              echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+              echo '<plist version="1.0">'
+              echo '<dict>'
+              echo '  <key>method</key>'
+              echo '  <string>app-store</string>'
+              echo '  <key>uploadBitcode</key>'
+              echo '  <false/>'
+              echo '  <key>uploadSymbols</key>'
+              echo '  <true/>'
+              echo '  <key>compileBitcode</key>'
+              echo '  <false/>'
+              echo '</dict>'
+              echo '</plist>'
+            } > /Users/builder/export_options.plist
           fi
       - name: Build signed IPA (App Store / Ad Hoc)
         script: |
