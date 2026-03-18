@@ -81,7 +81,16 @@ workflows:
       - name: Sync iOS project files with current Flutter SDK
         script: |
           # Prevent "Upgrading Podfile" surprises by syncing templates to the Flutter SDK used on CI.
+          # Backup our custom Podfile first
+          cp ios/Podfile ios/Podfile.backup || true
           flutter create --platforms=ios .
+          # Restore our custom Podfile if flutter create duplicated it
+          if grep -c "^platform :ios" ios/Podfile | grep -q "^2$"; then
+            echo "Podfile was duplicated by flutter create, restoring from backup..."
+            mv ios/Podfile.backup ios/Podfile
+          else
+            rm -f ios/Podfile.backup
+          fi
       - name: Install pods
         script: |
           cd ios
