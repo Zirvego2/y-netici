@@ -41,15 +41,22 @@ workflows:
           PROF_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
           mkdir -p "$CERT_DIR" "$PROF_DIR"
 
-          # NOTE: This command requires the bundle id identifier as the last argument.
-          # We use --create so Codemagic can create a fresh profile if needed.
-          app-store-connect fetch-signing-files \
-            --platform IOS \
-            --type IOS_APP_STORE \
-            --create \
-            --certificates-dir "$CERT_DIR" \
-            --profiles-dir "$PROF_DIR" \
-            com.zirvego.yonetici
+          # App Store Connect API key env vars are required for fetch-signing-files.
+          # If they are not configured in Codemagic, skip fetching and rely on
+          # already-uploaded certificates/profiles in Codemagic UI.
+          if [ -n "${APP_STORE_CONNECT_ISSUER_ID:-}" ] && [ -n "${APP_STORE_CONNECT_KEY_IDENTIFIER:-}" ] && [ -n "${APP_STORE_CONNECT_PRIVATE_KEY:-}" ]; then
+            # NOTE: This command requires the bundle id identifier as the last argument.
+            # We use --create so Codemagic can create a fresh profile if needed.
+            app-store-connect fetch-signing-files \
+              --platform IOS \
+              --type IOS_APP_STORE \
+              --create \
+              --certificates-dir "$CERT_DIR" \
+              --profiles-dir "$PROF_DIR" \
+              com.zirvego.yonetici
+          else
+            echo "App Store Connect API key env vars not set; skipping fetch-signing-files."
+          fi
 
           # Import any downloaded / pre-provisioned .p12 into the build keychain.
           keychain add-certificates
