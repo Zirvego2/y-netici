@@ -6,9 +6,10 @@ workflows:
     environment:
       flutter: "3.22.0"
       # IMPORTANT: "latest" kullanmayın. Codemagic hesabınızda mevcut olan bir Xcode sürümüne pinleyin.
-      # Xcode 16.x ile bazı eski gRPC-Core sürümleri (Firebase transitif) derlenemeyebiliyor.
-      # Bu yüzden Xcode 15.x'e pinliyoruz. Codemagic UI'da hangisi varsa onu kullanın (örn: "15.4" veya "15.2").
-      xcode: "15.4"
+      # NOT: "15.4" sizin Codemagic imajınızda yoksa "Unsupported Xcode version" hatası alırsınız.
+      # Codemagic UI'da hangi Xcode sürümleri listeleniyorsa onlardan birini yazın.
+      # Şimdilik en yaygın desteklenen sürümlerden birine pinliyoruz:
+      xcode: "16.2"
       cocoapods: default
       groups:
         - app_store_credentials
