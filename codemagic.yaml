@@ -35,6 +35,17 @@ workflows:
           pod repo update
           pod install --repo-update
           cd ..
+      - name: Verify Podfile + detect -G in Pods project (must be empty)
+        script: |
+          echo "===== ios/Podfile (first 120 lines) ====="
+          sed -n '1,120p' ios/Podfile
+          echo "===== Searching for -G in Pods.xcodeproj ====="
+          if [ -f "ios/Pods/Pods.xcodeproj/project.pbxproj" ]; then
+            # If this prints lines, it shows EXACTLY which pod/target injected -G.
+            grep -n "\\-G" ios/Pods/Pods.xcodeproj/project.pbxproj || echo "OK: No -G found in Pods project"
+          else
+            echo "Pods project not found (pod install may have failed?)"
+          fi
       - name: Diagnose -G flag
         script: |
           echo "Searching for -G in Pods project..."
