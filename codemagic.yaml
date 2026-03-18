@@ -30,6 +30,13 @@ workflows:
           pod deintegrate || true
           pod cache clean --all || true
           cd ..
+      - name: Set up keychain + fetch signing files (Codemagic)
+        script: |
+          # Makes sure certificates/profiles from Codemagic "Code signing identities" are available in the build keychain.
+          keychain initialize
+          # If App Store Connect integration is configured in Codemagic, this fetches provisioning profiles/certs.
+          app-store-connect fetch-signing-files || true
+          keychain add-certificates
       - name: Get Flutter packages
         script: |
           flutter pub get
