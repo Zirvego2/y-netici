@@ -142,9 +142,47 @@ workflows:
           echo "PROVISIONING_PROFILE_SPECIFIER: ${PROVISIONING_PROFILE_SPECIFIER:-NOT SET}"
           echo "DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM:-NOT SET}"
           
-          # export_options.plist dosyasının varlığını kontrol et
+          # Keychain'deki mevcut certificate'leri listele
+          echo ""
+          echo "Available code signing certificates in keychain:"
+          security find-identity -p codesigning -v | grep "Apple Distribution" || echo "No Apple Distribution certificates found"
+          
+          # Provisioning profile'dan certificate bilgisini al
+          # Provisioning profile'ı bul ve içindeki certificate bilgisini oku
+          PROFILE_PATH=""
+          if [ -n "${PROVISIONING_PROFILE_SPECIFIER:-}" ]; then
+            # Provisioning profile'ı bul
+            PROFILE_PATH=$(find "$HOME/Library/MobileDevice/Provisioning Profiles" -name "*.mobileprovision" -exec grep -l "$PROVISIONING_PROFILE_SPECIFIER" {} \; 2>/dev/null | head -1)
+            if [ -n "$PROFILE_PATH" ]; then
+              echo "Found provisioning profile at: $PROFILE_PATH"
+              # Provisioning profile'dan certificate bilgisini çıkar
+              CERT_NAME=$(security cms -D -i "$PROFILE_PATH" 2>/dev/null | grep -A 1 "DeveloperCertificates" | grep -o "CN=[^,]*" | head -1 | sed 's/CN=//' || echo "")
+              if [ -n "$CERT_NAME" ]; then
+                echo "Certificate name from profile: $CERT_NAME"
+              fi
+            fi
+          fi
+          
+          # Keychain'deki Apple Distribution certificate'ini bul
+          SIGNING_CERT=$(security find-identity -p codesigning -v | grep "Apple Distribution" | head -1 | sed 's/.*"\(.*\)".*/\1/' || echo "")
+          
+          # export_options.plist dosyasının varlığını kontrol et ve güncelle
           if [ -f "/Users/builder/export_options.plist" ]; then
             echo "OK: export_options.plist found at /Users/builder/export_options.plist"
+            # Eğer signingCertificate yoksa ekle
+            if ! grep -q "signingCertificate" /Users/builder/export_options.plist && [ -n "$SIGNING_CERT" ]; then
+              echo "Adding signingCertificate to export_options.plist..."
+              # plutil kullanarak signingCertificate ekle (macOS'ta mevcut)
+              plutil -insert signingCertificate -string "$SIGNING_CERT" /Users/builder/export_options.plist 2>/dev/null || {
+                echo "plutil not available, using sed to add signingCertificate..."
+                # plutil yoksa sed ile ekle (daha güvenli yöntem)
+                # Önce mevcut dosyayı yedekle
+                cp /Users/builder/export_options.plist /Users/builder/export_options.plist.backup
+                # </dict> satırından önce signingCertificate ekle
+                sed -i '' "s|</dict>|  <key>signingCertificate</key>\\n  <string>$SIGNING_CERT</string>\\n</dict>|" /Users/builder/export_options.plist 2>/dev/null || \
+                sed -i "s|</dict>|  <key>signingCertificate</key>\\n  <string>$SIGNING_CERT</string>\\n</dict>|" /Users/builder/export_options.plist
+              }
+            fi
           else
             echo "WARNING: export_options.plist not found at /Users/builder/export_options.plist"
             echo "Creating basic export_options.plist..."
@@ -156,6 +194,10 @@ workflows:
               echo '<dict>'
               echo '  <key>method</key>'
               echo '  <string>app-store</string>'
+              if [ -n "$SIGNING_CERT" ]; then
+                echo '  <key>signingCertificate</key>'
+                echo "  <string>$SIGNING_CERT</string>"
+              fi
               echo '  <key>uploadBitcode</key>'
               echo '  <false/>'
               echo '  <key>uploadSymbols</key>'
@@ -166,6 +208,11 @@ workflows:
               echo '</plist>'
             } > /Users/builder/export_options.plist
           fi
+          
+          # Final export_options.plist içeriğini göster
+          echo ""
+          echo "Final export_options.plist content:"
+          cat /Users/builder/export_options.plist
       - name: Build signed IPA (App Store / Ad Hoc)
         script: |
           set -o pipefail
@@ -203,15 +250,30 @@ workflows:
             cd ..
           fi
           
-          # 5. Code signing bilgilerini Xcode projesinden al
+          # 5. Code signing bilgilerini Xcode projesinden ve environment'tan al
           # xcode-project use-profiles zaten çalıştırıldı, proje ayarları güncellenmiş olmalı
-          # Xcode projesinden signing bilgilerini oku
-          PROFILE_SPECIFIER=$(grep -A 1 'PROVISIONING_PROFILE_SPECIFIER' ios/Runner.xcodeproj/project.pbxproj | grep -o '"[^"]*"' | head -1 | tr -d '"' || echo "")
-          TEAM_ID=$(grep -A 1 'DEVELOPMENT_TEAM' ios/Runner.xcodeproj/project.pbxproj | grep -o '[A-Z0-9]\{10\}' | head -1 || echo "")
+          # Önce environment variable'ları kontrol et (xcode-project use-profiles tarafından set edilmiş olabilir)
+          if [ -z "${PROVISIONING_PROFILE_SPECIFIER:-}" ]; then
+            PROFILE_SPECIFIER=$(grep -A 1 'PROVISIONING_PROFILE_SPECIFIER' ios/Runner.xcodeproj/project.pbxproj | grep -o '"[^"]*"' | head -1 | tr -d '"' || echo "")
+          else
+            PROFILE_SPECIFIER="$PROVISIONING_PROFILE_SPECIFIER"
+          fi
           
-          echo "Code signing info from Xcode project:"
+          if [ -z "${DEVELOPMENT_TEAM:-}" ]; then
+            # Xcode projesinden tam team ID'yi al (10 karakter)
+            TEAM_ID=$(grep -E 'DEVELOPMENT_TEAM\s*=' ios/Runner.xcodeproj/project.pbxproj | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
+          else
+            TEAM_ID="$DEVELOPMENT_TEAM"
+          fi
+          
+          echo "Code signing info for archive:"
           echo "PROVISIONING_PROFILE_SPECIFIER: ${PROFILE_SPECIFIER:-NOT FOUND}"
           echo "DEVELOPMENT_TEAM: ${TEAM_ID:-NOT FOUND}"
+          
+          # Keychain'deki certificate'leri kontrol et
+          echo ""
+          echo "Available certificates in keychain:"
+          security find-identity -p codesigning -v | grep "Apple Distribution" || echo "No Apple Distribution certificates found"
           
           # 6. Xcode archive (pod install tamamlandı, Podfile korunuyor)
           cd ios
@@ -233,12 +295,30 @@ workflows:
             exit $ARCHIVE_EXIT_CODE
           fi
           
-          # 7. Export IPA
+          # 7. Export IPA (signing certificate ile)
           if [ ! -f "/Users/builder/export_options.plist" ]; then
             echo "ERROR: export_options.plist not found!"
             exit 1
           fi
           
+          # Export öncesi export_options.plist'i kontrol et
+          echo ""
+          echo "Export options plist content before export:"
+          cat /Users/builder/export_options.plist
+          
+          # Keychain'deki certificate'leri tekrar kontrol et
+          echo ""
+          echo "Available certificates before export:"
+          security find-identity -p codesigning -v | grep "Apple Distribution" || echo "No Apple Distribution certificates found"
+          
+          # Archive içindeki signing bilgilerini kontrol et
+          if [ -d "build/ios/Runner.xcarchive" ]; then
+            echo ""
+            echo "Archive signing info:"
+            codesign -dvvv build/ios/Runner.xcarchive/Products/Applications/Runner.app 2>&1 | grep -E "(Authority|TeamIdentifier)" || echo "Could not read archive signing info"
+          fi
+          
+          # Export işlemi
           xcodebuild -exportArchive \
             -archivePath build/ios/Runner.xcarchive \
             -exportPath build/ios/ipa \
@@ -247,7 +327,21 @@ workflows:
           
           if [ -n "${EXPORT_EXIT_CODE:-}" ]; then
             echo "ERROR: IPA export failed with exit code $EXPORT_EXIT_CODE"
+            echo ""
+            echo "Export log:"
             cat xcode_export.log
+            echo ""
+            echo "Troubleshooting:"
+            echo "1. Check if provisioning profile matches certificate:"
+            if [ -n "${PROFILE_SPECIFIER:-}" ]; then
+              PROFILE_PATH=$(find "$HOME/Library/MobileDevice/Provisioning Profiles" -name "*.mobileprovision" -exec grep -l "$PROFILE_SPECIFIER" {} \; 2>/dev/null | head -1)
+              if [ -n "$PROFILE_PATH" ]; then
+                echo "   Profile path: $PROFILE_PATH"
+                security cms -D -i "$PROFILE_PATH" 2>/dev/null | grep -A 5 "DeveloperCertificates" || echo "   Could not read profile certificates"
+              fi
+            fi
+            echo "2. Available certificates:"
+            security find-identity -p codesigning -v
             exit $EXPORT_EXIT_CODE
           fi
           
