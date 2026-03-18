@@ -78,17 +78,16 @@ workflows:
       - name: Get Flutter packages
         script: |
           flutter pub get
-      - name: Sync iOS project files with current Flutter SDK
+      - name: Verify Podfile integrity
         script: |
-          # Prevent "Upgrading Podfile" surprises by syncing templates to the Flutter SDK used on CI.
-          # Backup our custom Podfile first (it has post_install hooks and -G flag fixes)
-          cp ios/Podfile ios/Podfile.backup || true
-          flutter create --platforms=ios .
-          # Always restore our custom Podfile: flutter create regenerates it with template,
-          # which would overwrite our post_install hooks and cause "multiple post_install hooks" error.
-          if [ -f ios/Podfile.backup ]; then
-            echo "Restoring custom Podfile (with post_install hooks) after flutter create..."
-            mv ios/Podfile.backup ios/Podfile
+          # Ensure Podfile has only one post_install block (flutter create was breaking it)
+          if [ -f ios/Podfile ]; then
+            post_install_count=$(grep -c "^post_install do" ios/Podfile || echo "0")
+            if [ "$post_install_count" != "1" ]; then
+              echo "ERROR: Podfile has $post_install_count post_install blocks (expected 1)"
+              exit 1
+            fi
+            echo "OK: Podfile has exactly 1 post_install block"
           fi
       - name: Install pods
         script: |
