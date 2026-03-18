@@ -12,8 +12,6 @@ workflows:
       xcode: "16.2"
       cocoapods: default
       ios_signing:
-        # Let Codemagic pick the matching provisioning profile + certificate automatically
-        # for this bundle id and distribution type.
         distribution_type: app_store
         bundle_identifier: com.zirvego.yonetici
       groups:
@@ -35,42 +33,6 @@ workflows:
           pod deintegrate || true
           pod cache clean --all || true
           cd ..
-      - name: Set up keychain + fetch signing files (Codemagic)
-        script: |
-          # Makes sure certificates/profiles from Codemagic "Code signing identities" are available in the build keychain.
-          set -e
-          keychain initialize
-
-          # Fetch App Store provisioning profile for this bundle id via App Store Connect API key (provided by Codemagic).
-          CERT_DIR="$HOME/Library/MobileDevice/Certificates"
-          PROF_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
-          mkdir -p "$CERT_DIR" "$PROF_DIR"
-
-          # App Store Connect API key env vars are required for fetch-signing-files.
-          # If they are not configured in Codemagic, skip fetching and rely on
-          # already-uploaded certificates/profiles in Codemagic UI.
-          if [ -n "${APP_STORE_CONNECT_ISSUER_ID:-}" ] && [ -n "${APP_STORE_CONNECT_KEY_IDENTIFIER:-}" ] && [ -n "${APP_STORE_CONNECT_PRIVATE_KEY:-}" ]; then
-            # NOTE: This command requires the bundle id identifier as the last argument.
-            # We use --create so Codemagic can create a fresh profile if needed.
-            app-store-connect fetch-signing-files \
-              --platform IOS \
-              --type IOS_APP_STORE \
-              --create \
-              --certificates-dir "$CERT_DIR" \
-              --profiles-dir "$PROF_DIR" \
-              com.zirvego.yonetici
-          else
-            echo "App Store Connect API key env vars not set; skipping fetch-signing-files."
-          fi
-
-          # Import any downloaded / pre-provisioned .p12 into the build keychain.
-          # NOTE: When using Codemagic "Code signing identities" + `xcode-project use-profiles`,
-          # certificates may be injected later by Codemagic tools. So don't fail the build here
-          # if no .p12 files are present in the default search locations yet.
-          keychain add-certificates || echo "No local .p12 found yet; continuing (xcode-project use-profiles will handle signing)."
-
-          # Diagnostic (non-fatal)
-          security find-identity -p codesigning -v || true
       - name: Get Flutter packages
         script: |
           flutter pub get
@@ -131,7 +93,12 @@ workflows:
       - name: Set up code signing (Codemagic profiles)
         script: |
           # xcode-project use-profiles profiles'ları Xcode projesine uygular ve export_options.plist oluşturur
-          xcode-project use-profiles
+          xcode-project use-profiles --project ios/Runner.xcodeproj
+          
+          if [ ! -f "/Users/builder/export_options.plist" ]; then
+            echo "ERROR: /Users/builder/export_options.plist not found after xcode-project use-profiles"
+            exit 1
+          fi
           
           # Keychain'deki certificate'leri kontrol et
           echo "Available certificates in keychain:"
@@ -150,53 +117,22 @@ workflows:
             done
           fi
           
-          # export_options.plist'i kontrol et veya oluştur
-          if [ -f "/Users/builder/export_options.plist" ]; then
-            echo "OK: export_options.plist found at /Users/builder/export_options.plist"
-            echo "Current export_options.plist content:"
-            cat /Users/builder/export_options.plist
-          else
-            echo "WARNING: export_options.plist not found at /Users/builder/export_options.plist"
-            echo "Creating basic export_options.plist (without signingCertificate)..."
-            {
-              echo '<?xml version="1.0" encoding="UTF-8"?>'
-              echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
-              echo '<plist version="1.0">'
-              echo '<dict>'
-              echo '  <key>method</key>'
-              echo '  <string>app-store</string>'
-              echo '  <key>uploadBitcode</key>'
-              echo '  <false/>'
-              echo '  <key>uploadSymbols</key>'
-              echo '  <true/>'
-              echo '  <key>compileBitcode</key>'
-              echo '  <false/>'
-              echo '</dict>'
-              echo '</plist>'
-            } > /Users/builder/export_options.plist
-          fi
-          
           echo ""
-          echo "Final export_options.plist content:"
+          echo "Generated export_options.plist:"
           cat /Users/builder/export_options.plist
       - name: Build signed IPA (App Store / Ad Hoc)
         script: |
           set -o pipefail
-          # KESIN ÇÖZÜM: flutter build ipa/build ios içinde pod install çalışıyor ve
-          # Flutter'ın flutter_ios_podfile_setup fonksiyonu otomatik post_install ekliyor.
-          # Podfile'ı korumak için: backup al, build yap, restore et, pod install tekrar çalıştır.
           
-          # 1. Podfile backup (kesin koruma)
+          # Podfile backup/restore: flutter build ipa sırasında post_install tekrar eklenebiliyor.
           cp ios/Podfile ios/Podfile.backup
           echo "Podfile backed up. Original post_install count: $(grep -c '^post_install do' ios/Podfile || echo '0')"
           
-          # 2. Flutter build ios (içinde pod install var, Podfile'ı değiştirebilir)
-          flutter build ios --release \
+          flutter build ipa --release \
             --build-number=$CM_BUILD_NUMBER \
-            --no-codesign \
-            2>&1 | tee flutter_build_ios.log || BUILD_EXIT_CODE=$?
+            --export-options-plist=/Users/builder/export_options.plist \
+            2>&1 | tee flutter_build_ipa.log || BUILD_EXIT_CODE=$?
           
-          # 3. Podfile restore (flutter build ios duplicate post_install eklemiş olabilir)
           if [ -f ios/Podfile.backup ]; then
             echo "Restoring Podfile from backup..."
             mv ios/Podfile.backup ios/Podfile
@@ -209,131 +145,16 @@ workflows:
               exit 1
             fi
             
-            # 4. Pod install tekrar çalıştır (restore edilmiş Podfile ile)
             echo "Running pod install with restored Podfile..."
             cd ios
             pod install
             cd ..
           fi
           
-          # 5. Code signing bilgilerini Xcode projesinden ve environment'tan al
-          # xcode-project use-profiles zaten çalıştırıldı, proje ayarları güncellenmiş olmalı
-          # Önce environment variable'ları kontrol et (xcode-project use-profiles tarafından set edilmiş olabilir)
-          if [ -z "${PROVISIONING_PROFILE_SPECIFIER:-}" ]; then
-            PROFILE_SPECIFIER=$(grep -A 1 'PROVISIONING_PROFILE_SPECIFIER' ios/Runner.xcodeproj/project.pbxproj | grep -o '"[^"]*"' | head -1 | tr -d '"' || echo "")
-          else
-            PROFILE_SPECIFIER="$PROVISIONING_PROFILE_SPECIFIER"
-          fi
-          
-          if [ -z "${DEVELOPMENT_TEAM:-}" ]; then
-            # Xcode projesinden tam team ID'yi al (10 karakter)
-            TEAM_ID=$(grep -E 'DEVELOPMENT_TEAM\s*=' ios/Runner.xcodeproj/project.pbxproj | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
-          else
-            TEAM_ID="$DEVELOPMENT_TEAM"
-          fi
-          
-          echo "Code signing info for archive:"
-          echo "PROVISIONING_PROFILE_SPECIFIER: ${PROFILE_SPECIFIER:-NOT FOUND}"
-          echo "DEVELOPMENT_TEAM: ${TEAM_ID:-NOT FOUND}"
-          
-          # Keychain'deki certificate'leri kontrol et
-          echo ""
-          echo "Available certificates in keychain:"
-          security find-identity -p codesigning -v | grep "Apple Distribution" || echo "No Apple Distribution certificates found"
-          
-          # 6. Xcode archive (pod install tamamlandı, Podfile korunuyor)
-          cd ios
-          
-          # Archive öncesi doğru certificate ve profile'ı bul
-          echo "Finding available certificates and profiles..."
-          AVAILABLE_CERTS=$(security find-identity -p codesigning -v | grep "Apple Distribution" | head -1)
-          echo "Available certificates:"
-          security find-identity -p codesigning -v | grep "Apple Distribution" || echo "No Apple Distribution certificates found"
-          
-          # Provisioning profile'ları kontrol et
-          echo ""
-          echo "Available provisioning profiles:"
-          if [ -d "$HOME/Library/MobileDevice/Provisioning Profiles" ]; then
-            ls -la "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision 2>/dev/null | head -5 || echo "No provisioning profiles found"
-          fi
-          
-          # xcode-project use-profiles tarafından set edilen değişkenleri kullan
-          # Ancak eğer profile ile certificate uyumsuzsa, doğru certificate'i bul
-          if [ -n "${PROVISIONING_PROFILE_SPECIFIER:-}" ]; then
-            echo "Using provisioning profile: $PROVISIONING_PROFILE_SPECIFIER"
-          fi
-          
-          # Archive işlemi - CODE_SIGN_STYLE=Manual kullan ama certificate/profile'ı otomatik seç
-          xcodebuild archive \
-            -workspace Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Release \
-            -archivePath "$(pwd)/../build/ios/Runner.xcarchive" \
-            -destination generic/platform=iOS \
-            CODE_SIGN_STYLE=Manual \
-            2>&1 | tee ../xcode_archive.log || ARCHIVE_EXIT_CODE=$?
-          cd ..
-          
-          if [ -n "${ARCHIVE_EXIT_CODE:-}" ]; then
-            echo "ERROR: Xcode archive failed with exit code $ARCHIVE_EXIT_CODE"
-            cat xcode_archive.log
-            exit $ARCHIVE_EXIT_CODE
-          fi
-          
-          # 7. Export IPA (signing certificate ile)
-          if [ ! -f "/Users/builder/export_options.plist" ]; then
-            echo "ERROR: export_options.plist not found!"
-            exit 1
-          fi
-          
-          # Export öncesi export_options.plist'i kontrol et
-          echo ""
-          echo "Export options plist content before export:"
-          cat /Users/builder/export_options.plist
-          
-          # Keychain'deki certificate'leri tekrar kontrol et
-          echo ""
-          echo "Available certificates before export:"
-          security find-identity -p codesigning -v | grep "Apple Distribution" || echo "No Apple Distribution certificates found"
-          
-          # Archive içindeki signing bilgilerini kontrol et
-          if [ -d "build/ios/Runner.xcarchive" ]; then
-            echo ""
-            echo "Archive signing info:"
-            codesign -dvvv build/ios/Runner.xcarchive/Products/Applications/Runner.app 2>&1 | grep -E "(Authority|TeamIdentifier)" || echo "Could not read archive signing info"
-          fi
-          
-          # Export işlemi
-          xcodebuild -exportArchive \
-            -archivePath build/ios/Runner.xcarchive \
-            -exportPath build/ios/ipa \
-            -exportOptionsPlist /Users/builder/export_options.plist \
-            2>&1 | tee xcode_export.log || EXPORT_EXIT_CODE=$?
-          
-          if [ -n "${EXPORT_EXIT_CODE:-}" ]; then
-            echo "ERROR: IPA export failed with exit code $EXPORT_EXIT_CODE"
-            echo ""
-            echo "Export log:"
-            cat xcode_export.log
-            echo ""
-            echo "Troubleshooting:"
-            echo "1. Check if provisioning profile matches certificate:"
-            if [ -n "${PROFILE_SPECIFIER:-}" ]; then
-              PROFILE_PATH=$(find "$HOME/Library/MobileDevice/Provisioning Profiles" -name "*.mobileprovision" -exec grep -l "$PROFILE_SPECIFIER" {} \; 2>/dev/null | head -1)
-              if [ -n "$PROFILE_PATH" ]; then
-                echo "   Profile path: $PROFILE_PATH"
-                security cms -D -i "$PROFILE_PATH" 2>/dev/null | grep -A 5 "DeveloperCertificates" || echo "   Could not read profile certificates"
-              fi
-            fi
-            echo "2. Available certificates:"
-            security find-identity -p codesigning -v
-            exit $EXPORT_EXIT_CODE
-          fi
-          
-          # 8. Final Podfile integrity kontrolü
+          # Final Podfile integrity kontrolü
           post_install_count=$(grep -c '^post_install do' ios/Podfile || echo '0')
           if [ "$post_install_count" != "1" ]; then
-            echo "WARNING: Podfile has $post_install_count post_install blocks after export (expected 1)"
+            echo "WARNING: Podfile has $post_install_count post_install blocks after build (expected 1)"
           else
             echo "SUCCESS: Podfile integrity maintained (1 post_install block)"
           fi
@@ -345,8 +166,7 @@ workflows:
     artifacts:
       - build/ios/ipa/*.ipa
       - flutter_build_ios.log
-      - xcode_archive.log
-      - xcode_export.log
+      - flutter_build_ipa.log
     publishing:
       app_store_connect:
         auth: integration
