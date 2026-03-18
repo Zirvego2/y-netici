@@ -1,11 +1,3 @@
-Evet, bu kesinlikle doğru ve çok daha spesifik bir çözüm. Xcode'un fırlattığı -G hatası, aslında kütüphanelerin içindeki -GCC_WARN_INHIBIT_ALL_WARNINGS gibi bayrakların içindeki -G kısmının derleyici tarafından yanlış yorumlanmasından kaynaklanıyor.
-
-Özellikle BoringSSL-GRPC ve gRPC-Core gibi kütüphaneler bu bayrağı kullanıyor ve Xcode 16.2 bunu bir hata olarak görüyor.
-
-İşte bu yeni spesifik çözümü, önceki "yol düzeltme (Read-only file system)" ve "genel temizlik" kodlarımızla birleştirdiğimiz en güncel ve sağlam Podfile:
-
-Güncellenmiş Podfile
-Ruby
 # Uncomment this line to define a global platform for your project
 platform :ios, '15.0'
 
