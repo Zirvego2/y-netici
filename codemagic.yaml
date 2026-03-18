@@ -29,6 +29,8 @@ workflows:
       - name: Flutter pub get
         script: |
           flutter pub get
+          # Flutter xcconfig dosyalarını oluştur
+          flutter precache --ios
 
       - name: Install pods
         script: |
