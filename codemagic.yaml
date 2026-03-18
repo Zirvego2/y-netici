@@ -277,6 +277,36 @@ workflows:
           
           # 6. Xcode archive (pod install tamamlandı, Podfile korunuyor)
           cd ios
+          
+          # export sırasında "provisioning profile ... doesn't include signing certificate" hatasını
+          # çözmek için archive işlemi sırasında kullanılacak CODE_SIGN_IDENTITY'yi
+          # provisioning profile içinden çıkarmayı deneriz.
+          CODE_SIGN_IDENTITY=""
+          CODE_SIGN_IDENTITY_FROM_PROFILE=""
+          if [ -n "${PROFILE_SPECIFIER:-}" ]; then
+            PROFILE_PATH=$(find "$HOME/Library/MobileDevice/Provisioning Profiles" -name "*.mobileprovision" -exec grep -l "$PROFILE_SPECIFIER" {} \; 2>/dev/null | head -1)
+            if [ -n "$PROFILE_PATH" ]; then
+              echo "Provisioning profile path (for extraction): $PROFILE_PATH"
+              # DeveloperCertificates içinde Apple Distribution string'i düz metin olarak geçebiliyor.
+              CODE_SIGN_IDENTITY_FROM_PROFILE=$(security cms -D -i "$PROFILE_PATH" 2>/dev/null | strings | grep -m1 "Apple Distribution" || true)
+              if [ -n "$CODE_SIGN_IDENTITY_FROM_PROFILE" ]; then
+                echo "Apple Distribution identity extracted from provisioning profile: $CODE_SIGN_IDENTITY_FROM_PROFILE"
+              else
+                echo "Could not extract Apple Distribution identity from provisioning profile via strings/grep."
+              fi
+            else
+              echo "Could not locate provisioning profile by PROVISIONING_PROFILE_SPECIFIER."
+            fi
+          fi
+          
+          if [ -n "$CODE_SIGN_IDENTITY_FROM_PROFILE" ]; then
+            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY_FROM_PROFILE"
+          else
+            # Fallback: keychain'deki ilk Apple Distribution sertifikasını kullan
+            CODE_SIGN_IDENTITY=$(security find-identity -p codesigning -v | grep "Apple Distribution" | head -1 | sed -E 's/^ *[0-9]+\) [0-9A-Fa-f]+ \"(.*)\".*/\1/' || true)
+          fi
+          
+          echo "Using CODE_SIGN_IDENTITY for archive: ${CODE_SIGN_IDENTITY:-NOT SET}"
           xcodebuild archive \
             -workspace Runner.xcworkspace \
             -scheme Runner \
@@ -286,6 +316,7 @@ workflows:
             CODE_SIGN_STYLE=Manual \
             ${PROFILE_SPECIFIER:+PROVISIONING_PROFILE_SPECIFIER="$PROFILE_SPECIFIER"} \
             ${TEAM_ID:+DEVELOPMENT_TEAM="$TEAM_ID"} \
+            ${CODE_SIGN_IDENTITY:+CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY"} \
             2>&1 | tee ../xcode_archive.log || ARCHIVE_EXIT_CODE=$?
           cd ..
           
