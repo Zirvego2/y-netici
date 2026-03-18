@@ -68,6 +68,39 @@ post_install do |installer|
       end
     end
   end
+
+  # Some pods (notably BoringSSL-GRPC / gRPC-Core) can inject compiler flags via *.xcconfig files.
+  # Pod build_settings changes above won't remove tokens defined in those xcconfig files.
+  # This makes the build deterministic in CI by stripping any `-G` / `-G*` tokens from xcconfig files.
+  xcconfig_globs = [
+    "Pods/Target Support Files/BoringSSL-GRPC/**/*.xcconfig",
+    "Pods/Target Support Files/gRPC-Core/**/*.xcconfig",
+    "Pods/Target Support Files/GoogleDataTransport/**/*.xcconfig",
+    "Pods/Target Support Files/FirebaseMessaging/**/*.xcconfig",
+  ]
+
+  xcconfig_globs.each do |glob|
+    Dir.glob(glob).each do |path|
+      begin
+        contents = File.read(path)
+        # Token-based removal: remove -G and -G* occurrences in flag lines without breaking other flags.
+        updated = contents.lines.map do |line|
+          if line =~ /OTHER_(CFLAGS|CPLUSPLUSFLAGS|LDFLAGS|SWIFT_FLAGS)\s*=/
+            tokens = line.split(/\s+/)
+            tokens.reject! { |t| t == '-G' || t.start_with?('-G') }
+            tokens.join(' ')
+          else
+            line
+          end
+        end.join
+        if updated != contents
+          File.write(path, updated)
+        end
+      rescue => e
+        Pod::UI.warn("Could not patch xcconfig #{path}: #{e}")
+      end
+    end
+  end
 end
 
 

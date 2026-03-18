@@ -48,11 +48,17 @@ workflows:
           fi
       - name: Diagnose -G flag
         script: |
-          echo "Searching for -G in Pods project..."
+          echo "Searching for *compiler flag* -G (not pod names) ..."
+          echo "1) Pods project (may include pod names, not always flags):"
           if [ -f "ios/Pods/Pods.xcodeproj/project.pbxproj" ]; then
-            grep -n "\\-G" ios/Pods/Pods.xcodeproj/project.pbxproj || echo "No -G flag found in Pods project"
+            grep -nE '(^|[[:space:]])-G([0-9A-Za-z._-]+)?($|[[:space:]])' ios/Pods/Pods.xcodeproj/project.pbxproj || true
+          fi
+          echo ""
+          echo "2) Target Support Files xcconfigs (MOST LIKELY source):"
+          if [ -d "ios/Pods/Target Support Files" ]; then
+            grep -RInE '(^|[[:space:]])-G([0-9A-Za-z._-]+)?($|[[:space:]])' "ios/Pods/Target Support Files" || echo "OK: No compiler -G token found in Target Support Files"
           else
-            echo "Pods project not found"
+            echo "Target Support Files not found"
           fi
       - name: Build unsigned IPA
         script: |
