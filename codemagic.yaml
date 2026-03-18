@@ -25,234 +25,29 @@ workflows:
       - name: Clean project
         script: |
           flutter clean
-          rm -rf build
-          rm -rf ~/Library/Developer/Xcode/DerivedData/*
-          cd ios
-          rm -rf Pods Podfile.lock .symlinks
-          pod deintegrate || true
-          pod cache clean --all || true
-          cd ..
 
-      - name: Get Flutter packages
+      - name: Flutter pub get
         script: |
           flutter pub get
-          
-          # Flutter xcconfig dosyalarının oluşturulduğundan emin ol
-          echo "Verifying Flutter xcconfig files..."
-          if [ ! -f "ios/Flutter/Generated.xcconfig" ]; then
-            echo "ERROR: ios/Flutter/Generated.xcconfig not found after flutter pub get"
-            echo "Creating Flutter directory structure..."
-            mkdir -p ios/Flutter
-            # Flutter'ı zorla xcconfig oluşturmaya zorla
-            flutter precache --ios || true
-            flutter pub get
-          fi
-          
-          # xcconfig dosyalarını kontrol et
-          if [ -f "ios/Flutter/Generated.xcconfig" ]; then
-            echo "✅ Generated.xcconfig found"
-            echo "First 10 lines:"
-            head -10 ios/Flutter/Generated.xcconfig
-          else
-            echo "ERROR: Generated.xcconfig still not found"
-            exit 1
-          fi
-          
-          if [ -f "ios/Flutter/Debug.xcconfig" ]; then
-            echo "✅ Debug.xcconfig found"
-          else
-            echo "ERROR: Debug.xcconfig not found"
-            exit 1
-          fi
-          
-          if [ -f "ios/Flutter/Release.xcconfig" ]; then
-            echo "✅ Release.xcconfig found"
-          else
-            echo "ERROR: Release.xcconfig not found"
-            exit 1
-          fi
-
-      - name: Verify Podfile integrity
-        script: |
-          if [ -f ios/Podfile ]; then
-            post_install_count=$(grep -c "^post_install do" ios/Podfile || echo "0")
-            if [ "$post_install_count" != "1" ]; then
-              echo "ERROR: Podfile has $post_install_count post_install blocks (expected 1)"
-              exit 1
-            fi
-            echo "OK: Podfile has exactly 1 post_install block"
-          else
-            echo "ERROR: ios/Podfile not found"
-            exit 1
-          fi
 
       - name: Install pods
         script: |
-          # Flutter xcconfig dosyalarının varlığını tekrar kontrol et
-          if [ ! -f "ios/Flutter/Generated.xcconfig" ]; then
-            echo "ERROR: Generated.xcconfig not found before pod install"
-            exit 1
-          fi
-          
           cd ios
-          pod repo update
-          pod install --repo-update
+          pod install
           cd ..
-          
-          # Pod install sonrası xcconfig dosyalarının hala var olduğunu kontrol et
-          if [ ! -f "ios/Flutter/Generated.xcconfig" ]; then
-            echo "ERROR: Generated.xcconfig disappeared after pod install"
-            exit 1
-          fi
-
-      - name: Verify -G flag in Pods project
-        script: |
-          echo "===== ios/Podfile (first 120 lines) ====="
-          sed -n '1,120p' ios/Podfile
-
-          echo ""
-          echo "===== Searching for -G in Pods.xcodeproj ====="
-          if [ -f "ios/Pods/Pods.xcodeproj/project.pbxproj" ]; then
-            grep -n "\\-G" ios/Pods/Pods.xcodeproj/project.pbxproj || echo "OK: No -G found in Pods project"
-          else
-            echo "ERROR: Pods project not found"
-            exit 1
-          fi
-
-          echo ""
-          echo "===== Searching Target Support Files for compiler -G token ====="
-          if [ -d "ios/Pods/Target Support Files" ]; then
-            grep -RInE '(^|[[:space:]])-G([0-9A-Za-z._-]+)?($|[[:space:]])' "ios/Pods/Target Support Files" || echo "OK: No compiler -G token found in Target Support Files"
-          else
-            echo "WARNING: Target Support Files not found"
-          fi
 
       - name: Set up code signing
         script: |
-          # xcode-project use-profiles profiles'ları Xcode projesine uygular ve export_options.plist oluşturur
           xcode-project use-profiles --project ios/Runner.xcodeproj
 
-          if [ ! -f "/Users/builder/export_options.plist" ]; then
-            echo "ERROR: /Users/builder/export_options.plist not found after xcode-project use-profiles"
-            exit 1
-          fi
-
-          # Keychain'deki certificate'leri kontrol et
-          echo "Available certificates in keychain:"
-          security find-identity -p codesigning -v | grep "Apple Distribution" || echo "No Apple Distribution certificates found"
-
-          # Provisioning profile'ları kontrol et ve certificate ile eşleştir
-          echo ""
-          echo "Checking provisioning profiles..."
-          if [ -d "$HOME/Library/MobileDevice/Provisioning Profiles" ]; then
-            for profile in "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision; do
-              if [ -f "$profile" ]; then
-                echo "Profile: $(basename "$profile")"
-                # Profile içindeki certificate'leri kontrol et
-                security cms -D -i "$profile" 2>/dev/null | grep -A 10 "DeveloperCertificates" | head -5 || true
-              fi
-            done
-          fi
-
-          echo ""
-          echo "Generated export_options.plist:"
-          cat /Users/builder/export_options.plist
-
-      - name: Build signed IPA
+      - name: Build IPA
         script: |
-          set -o pipefail
-
-          # Flutter xcconfig dosyalarının varlığını son kez kontrol et
-          echo "Final check: Flutter xcconfig files..."
-          ls -la ios/Flutter/*.xcconfig || {
-            echo "ERROR: Flutter xcconfig files missing before build"
-            exit 1
-          }
-
-          # Environment'tan sızabilecek signing override'ları temizle
-          unset PROVISIONING_PROFILE_SPECIFIER || true
-          unset DEVELOPMENT_TEAM || true
-          unset CODE_SIGN_IDENTITY || true
-          unset CODE_SIGN_STYLE || true
-
-          # Podfile backup
-          cp ios/Podfile ios/Podfile.backup
-          echo "Podfile backed up. Original post_install count: $(grep -c '^post_install do' ios/Podfile || echo '0')"
-
-          # Önce flutter build ios ile xcconfig dosyalarını oluştur ve doğrula
-          echo "Building iOS app (no codesign) to ensure xcconfig files are ready..."
-          flutter build ios \
-            --release \
+          flutter build ipa --release \
             --build-number=$CM_BUILD_NUMBER \
-            --no-codesign \
-            2>&1 | tee flutter_build_ios.log || BUILD_IOS_EXIT_CODE=$?
-
-          # xcconfig dosyalarının hala var olduğunu kontrol et
-          if [ ! -f "ios/Flutter/Generated.xcconfig" ]; then
-            echo "ERROR: Generated.xcconfig missing after flutter build ios"
-            exit 1
-          fi
-
-          # Podfile restore (flutter build ios Podfile'ı değiştirmiş olabilir)
-          if [ -f ios/Podfile.backup ]; then
-            echo "Restoring Podfile from backup..."
-            mv ios/Podfile.backup ios/Podfile
-            cd ios
-            pod install
-            cd ..
-          fi
-
-          # Archive ve export için xcodebuild kullan
-          echo "Creating archive..."
-          cd ios
-          xcodebuild archive \
-            -workspace Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Release \
-            -archivePath "$(pwd)/../build/ios/Runner.xcarchive" \
-            -destination generic/platform=iOS \
-            CODE_SIGN_STYLE=Manual \
-            2>&1 | tee ../xcode_archive.log || ARCHIVE_EXIT_CODE=$?
-          cd ..
-
-          if [ -n "${ARCHIVE_EXIT_CODE:-}" ]; then
-            echo "ERROR: Xcode archive failed with exit code $ARCHIVE_EXIT_CODE"
-            cat xcode_archive.log
-            exit $ARCHIVE_EXIT_CODE
-          fi
-
-          # Export IPA
-          echo "Exporting IPA..."
-          xcodebuild -exportArchive \
-            -archivePath build/ios/Runner.xcarchive \
-            -exportPath build/ios/ipa \
-            -exportOptionsPlist /Users/builder/export_options.plist \
-            2>&1 | tee xcode_export.log || EXPORT_EXIT_CODE=$?
-
-          if [ -n "${EXPORT_EXIT_CODE:-}" ]; then
-            echo "ERROR: IPA export failed with exit code $EXPORT_EXIT_CODE"
-            cat xcode_export.log
-            exit $EXPORT_EXIT_CODE
-          fi
-
-          # Build başarısız olduysa exit code'u koru
-          if [ -n "${BUILD_IOS_EXIT_CODE:-}" ]; then
-            exit $BUILD_IOS_EXIT_CODE
-          fi
-
-          # Final Podfile integrity kontrolü
-          post_install_count=$(grep -c '^post_install do' ios/Podfile || echo '0')
-          if [ "$post_install_count" != "1" ]; then
-            echo "WARNING: Podfile has $post_install_count post_install blocks after build (expected 1)"
-          else
-            echo "SUCCESS: Podfile integrity maintained (1 post_install block)"
-          fi
+            --export-options-plist=/Users/builder/export_options.plist
 
     artifacts:
       - build/ios/ipa/*.ipa
-      - flutter_build_ios.log
-      - xcode_archive.log
-      - xcode_export.log
 
     publishing:
       app_store_connect:
