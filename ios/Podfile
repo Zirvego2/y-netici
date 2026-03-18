@@ -1,3 +1,11 @@
+Evet, bu kesinlikle doğru ve çok daha spesifik bir çözüm. Xcode'un fırlattığı -G hatası, aslında kütüphanelerin içindeki -GCC_WARN_INHIBIT_ALL_WARNINGS gibi bayrakların içindeki -G kısmının derleyici tarafından yanlış yorumlanmasından kaynaklanıyor.
+
+Özellikle BoringSSL-GRPC ve gRPC-Core gibi kütüphaneler bu bayrağı kullanıyor ve Xcode 16.2 bunu bir hata olarak görüyor.
+
+İşte bu yeni spesifik çözümü, önceki "yol düzeltme (Read-only file system)" ve "genel temizlik" kodlarımızla birleştirdiğimiz en güncel ve sağlam Podfile:
+
+Güncellenmiş Podfile
+Ruby
 # Uncomment this line to define a global platform for your project
 platform :ios, '15.0'
 
@@ -36,11 +44,23 @@ end
 
 post_install do |installer|
   installer.pods_project.targets.each do |target|
+    
+    # --- YENİ: BoringSSL ve gRPC için Spesifik Flag Temizliği ---
+    if ['BoringSSL-GRPC', 'gRPC-Core', 'gRPC-C++'].include?(target.name)
+      target.source_build_phase.files.each do |file|
+        if file.settings && file.settings['COMPILER_FLAGS']
+          flags = file.settings['COMPILER_FLAGS'].split
+          # Sorun çıkaran tüm -G ile başlayan bayrakları temizle
+          flags.reject! { |flag| flag.start_with?('-G') || flag.include?('-GCC_WARN') }
+          file.settings['COMPILER_FLAGS'] = flags.join(' ')
+        end
+      end
+    end
+
     flutter_additional_ios_build_settings(target)
 
     target.build_configurations.each do |config|
       # --- Read-only file system hatası çözümü ---
-      # Xcode'un kök dizine (/) yazmaya çalışmasını engelleyip proje içine yönlendiriyoruz
       config.build_settings['SYMROOT'] = '${SRCROOT}/../build/ios'
       config.build_settings['OBJROOT'] = '${SRCROOT}/../build/ios'
       
@@ -51,7 +71,7 @@ post_install do |installer|
       config.build_settings['GCC_GENERATE_DEBUGGING_SYMBOLS'] = 'NO'
       config.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf'
 
-      # --- -G bayrağı temizleme (Flags üzerinden) ---
+      # --- Genel -G bayrağı temizleme ---
       %w[OTHER_CFLAGS OTHER_CPLUSPLUSFLAGS OTHER_SWIFT_FLAGS OTHER_LDFLAGS].each do |flag_key|
         flags = config.build_settings[flag_key]
         if flags.is_a?(Array)
@@ -63,7 +83,7 @@ post_install do |installer|
     end
   end
 
-  # --- xcconfig dosyalarını fiziksel olarak tarayıp -G bayrağını silme ---
+  # --- Fiziksel .xcconfig dosyalarını tarayıp temizleme ---
   xcconfig_globs = [
     "Pods/Target Support Files/**/*.xcconfig",
     "Flutter/*.xcconfig"
@@ -73,7 +93,6 @@ post_install do |installer|
     Dir.glob(glob).each do |path|
       begin
         contents = File.read(path)
-        # Regex ile -G ve yanındaki tüm karakterleri (ör: -G1) kaldırır
         updated = contents.gsub(/\s+-G\S*/, "")
         if updated != contents
           File.write(path, updated)
